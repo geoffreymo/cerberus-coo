@@ -1,0 +1,21 @@
+# Coordinates
+X_IMAGE
+Y_IMAGE
+
+# Flux Measurements
+FLUX_AUTO          # Auto-flux in the detected aperture
+FLUX_RADIUS        # Flux within the specified radius
+FLUX_MAX
+
+# Shape and Size Measurements
+FWHM_IMAGE         # Full Width at Half Maximum (FWHM) of the source
+A_IMAGE            # Semi-major axis of the source
+B_IMAGE            # Semi-minor axis of the source
+ELONGATION         # Elongation, defined as A/B (aspect ratio)
+
+# Background and Noise
+BACKGROUND         # Background value for the source
+MAG_AUTO           # Magnitude derived from the total flux
+
+# Other Useful Parameters
+SNR_WIN                # Signal-to-noise ratio

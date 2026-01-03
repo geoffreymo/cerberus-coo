@@ -1,0 +1,132 @@
+# gui/panels/filter_panel.py
+"""Filter wheel controls panel for Cerberus GUI."""
+
+import tkinter as tk
+from tkinter import ttk, filedialog
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...api import CerberusAPI
+
+
+class FilterPanel(ttk.LabelFrame):
+    """
+    Panel for filter wheel controls.
+
+    Includes filter selection and connection controls.
+    """
+
+    def __init__(self, parent, api: 'CerberusAPI'):
+        super().__init__(parent, text="Filter Wheel", padding=5)
+        self.api = api
+
+        # Variables
+        self.current_filter_var = tk.StringVar(value="--")
+        self.selected_filter_var = tk.StringVar(value="")
+        self.config_path_var = tk.StringVar(value="")
+
+        self._create_widgets()
+
+    def _create_widgets(self):
+        """Create panel widgets."""
+        # Connection
+        conn_frame = ttk.Frame(self)
+        conn_frame.pack(fill=tk.X, pady=2)
+
+        self.connect_btn = ttk.Button(
+            conn_frame, text="Connect", command=self._on_connect
+        )
+        self.connect_btn.pack(side=tk.LEFT, padx=2)
+
+        self.status_label = ttk.Label(conn_frame, text="Disconnected")
+        self.status_label.pack(side=tk.LEFT, padx=10)
+
+        # Config path
+        config_frame = ttk.Frame(self)
+        config_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(config_frame, text="Config:").pack(side=tk.LEFT)
+        ttk.Entry(
+            config_frame, textvariable=self.config_path_var, width=25
+        ).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        ttk.Button(
+            config_frame, text="...", command=self._browse_config, width=3
+        ).pack(side=tk.LEFT)
+
+        # Separator
+        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # Current filter
+        current_frame = ttk.Frame(self)
+        current_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(current_frame, text="Current:").pack(side=tk.LEFT)
+        ttk.Label(
+            current_frame, textvariable=self.current_filter_var,
+            width=15, font=('TkDefaultFont', 10, 'bold')
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Filter selection
+        select_frame = ttk.Frame(self)
+        select_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(select_frame, text="Select:").pack(side=tk.LEFT)
+        self.filter_combo = ttk.Combobox(
+            select_frame,
+            textvariable=self.selected_filter_var,
+            width=15,
+            state="readonly"
+        )
+        self.filter_combo.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            select_frame, text="Go", command=self._on_filter_change, width=5
+        ).pack(side=tk.LEFT, padx=2)
+
+    def _browse_config(self):
+        """Open config file browser."""
+        filepath = filedialog.askopenfilename(
+            title="Select Filter Config",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.config_path_var.set(filepath)
+
+    def _on_connect(self):
+        """Handle connect button click."""
+        if self.api.state.filterwheel_connected:
+            self.api.disconnect_filterwheel()
+            self.connect_btn.config(text="Connect")
+            self.status_label.config(text="Disconnected", foreground="black")
+            self.filter_combo['values'] = []
+        else:
+            config_path = self.config_path_var.get() or None
+            if self.api.connect_filterwheel(config_path=config_path):
+                self.connect_btn.config(text="Disconnect")
+                self.status_label.config(text="Connected", foreground="green")
+                # Update filter list
+                filters = self.api.get_available_filters()
+                self.filter_combo['values'] = filters
+                if filters:
+                    self.selected_filter_var.set(filters[0])
+            else:
+                self.status_label.config(text="Failed", foreground="red")
+
+    def _on_filter_change(self):
+        """Handle filter selection change."""
+        selected = self.selected_filter_var.get()
+        if selected:
+            self.api.set_filter(selected)
+
+    def update_from_state(self, state):
+        """Update panel from system state."""
+        if state.filterwheel_connected:
+            self.connect_btn.config(text="Disconnect")
+            self.status_label.config(text="Connected", foreground="green")
+            if state.available_filters:
+                self.filter_combo['values'] = state.available_filters
+        else:
+            self.connect_btn.config(text="Connect")
+            self.status_label.config(text="Disconnected", foreground="black")
+
+        self.current_filter_var.set(state.current_filter or "--")
