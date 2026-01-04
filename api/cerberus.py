@@ -294,6 +294,10 @@ class CerberusAPI:
             timing_info=timing_info
         )
         self.writer.set_camera_params(self.camera.get_all_params())
+
+        # Set telescope data if connected
+        self._update_writer_telescope_data()
+
         self.writer.start()
 
         with self._state_lock:
@@ -674,11 +678,59 @@ class CerberusAPI:
                 self._state.frames_dropped = self.writer.frames_dropped
                 self._state.cubes_saved = self.writer.cubes_written
 
+        # Refresh telescope data in writer for next cube (outside lock)
+        if self._state.is_saving and self._state.telescope_connected:
+            self._update_writer_telescope_data()
+
         self._notify_status_change()
 
     # ==========================================================================
     # Private Methods
     # ==========================================================================
+
+    def _update_writer_telescope_data(self):
+        """Update the FITS writer with current telescope data."""
+        if not self._state.telescope_connected:
+            return
+
+        try:
+            # Get position and status from telescope
+            position = self.telescope.get_position()
+            status = self.telescope.get_status()
+
+            # Convert dataclasses to dicts
+            position_dict = None
+            status_dict = None
+
+            if position:
+                position_dict = {
+                    'ra': position.ra,
+                    'dec': position.dec,
+                    'ha': position.ha,
+                    'lst': position.lst,
+                    'airmass': position.airmass,
+                    'utc_time': position.utc_time,
+                    'utc_day': position.utc_day,
+                }
+
+            if status:
+                status_dict = {
+                    'focus_mm': status.focus_mm,
+                    'tube_length_mm': status.tube_length_mm,
+                    'offset_ra_arcsec': status.offset_ra_arcsec,
+                    'offset_dec_arcsec': status.offset_dec_arcsec,
+                    'rate_ra_arcsec_hr': status.rate_ra_arcsec_hr,
+                    'rate_dec_arcsec_hr': status.rate_dec_arcsec_hr,
+                    'cass_ring_angle': status.cass_ring_angle,
+                    'telescope_id': status.telescope_id,
+                    'utc_time': status.utc_time,
+                    'utc_day': status.utc_day,
+                }
+
+            self.writer.set_telescope_data(position_dict, status_dict)
+
+        except Exception as e:
+            logger.warning(f"Could not update telescope data: {e}")
 
     def _on_camera_frame(self, frame: np.ndarray, timestamp: float, framestamp: int):
         """Internal handler for camera frames."""

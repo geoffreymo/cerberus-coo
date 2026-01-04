@@ -90,6 +90,10 @@ class FITSWriter:
         self._camera_params: Dict[str, Any] = {}
         self._params_lock = threading.Lock()
 
+        # Telescope params snapshot (set by caller)
+        self._telescope_position: Optional[Dict[str, Any]] = None
+        self._telescope_status: Optional[Dict[str, Any]] = None
+
     def configure(
         self,
         output_dir: str,
@@ -115,6 +119,19 @@ class FITSWriter:
         """Set camera parameters for FITS headers."""
         with self._params_lock:
             self._camera_params = dict(params)
+
+    def set_telescope_data(self, position: Optional[Dict[str, Any]] = None,
+                           status: Optional[Dict[str, Any]] = None):
+        """
+        Set telescope data for FITS headers.
+
+        Args:
+            position: Dict from TelescopePosition (ra, dec, ha, airmass, etc.)
+            status: Dict from TelescopeStatus (focus_mm, offsets, etc.)
+        """
+        with self._params_lock:
+            self._telescope_position = position
+            self._telescope_status = status
 
     def start(self):
         """Start the writer thread."""
@@ -329,16 +346,19 @@ class FITSWriter:
             self._timestamp_buffer = np.empty_like(timestamps)
             self._framestamp_buffer = np.empty_like(framestamps)
 
-        # Get camera params
+        # Get camera and telescope params
         with self._params_lock:
             camera_params = dict(self._camera_params)
+            telescope_position = dict(self._telescope_position) if self._telescope_position else None
+            telescope_status = dict(self._telescope_status) if self._telescope_status else None
 
         # Submit to thread pool
         write_start = time.time()
         future = self._executor.submit(
             self._write_fits,
             filepath, frames, timestamps, framestamps,
-            n_frames, self._cube_index, camera_params, write_start
+            n_frames, self._cube_index, camera_params,
+            telescope_position, telescope_status, write_start
         )
 
         self._pending_writes.append((filepath, future, n_frames))
@@ -356,6 +376,8 @@ class FITSWriter:
         n_frames: int,
         cube_index: int,
         camera_params: Dict[str, Any],
+        telescope_position: Optional[Dict[str, Any]],
+        telescope_status: Optional[Dict[str, Any]],
         write_start: float
     ) -> bool:
         """Write FITS file (runs in thread pool)."""
@@ -372,20 +394,16 @@ class FITSWriter:
             # Add timing info
             self._add_timing_headers(primary_hdu.header)
 
+            # Add telescope data to primary header
+            self._add_telescope_headers(primary_hdu.header, telescope_position, telescope_status)
+
             # Create image HDU
             data_cube = frames[:n_frames] if len(frames) > n_frames else frames
             image_hdu = fits.ImageHDU(data=data_cube)
             image_hdu.header['EXTNAME'] = 'DATA_CUBE'
 
-            # Add camera parameters
-            for key, value in camera_params.items():
-                key_short = key[:8] if len(key) > 8 else key
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore")
-                    try:
-                        image_hdu.header[key_short] = value
-                    except:
-                        pass
+            # Add camera parameters using HIERARCH for long keywords
+            self._add_camera_headers(image_hdu.header, camera_params)
 
             # Create timestamp table
             ts_data = timestamps[:n_frames] if len(timestamps) > n_frames else timestamps
@@ -420,6 +438,52 @@ class FITSWriter:
         except Exception as e:
             logger.error(f"FITS write error: {e}", exc_info=True)
             return False
+
+    def _add_camera_headers(self, header, camera_params: Dict[str, Any]):
+        """
+        Add camera parameters to FITS header using HIERARCH for long keywords.
+
+        HIERARCH allows keywords longer than 8 characters, preventing truncation
+        and accidental overwriting of similarly-named parameters.
+        """
+        for key, value in camera_params.items():
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore")
+                try:
+                    if len(key) > 8:
+                        # Use HIERARCH convention for long keywords
+                        # Format: "HIERARCH CAM KEYWORD_NAME"
+                        hierarch_key = f"HIERARCH CAM {key}"
+                        header[hierarch_key] = value
+                    else:
+                        header[key] = value
+                except Exception as e:
+                    logger.debug(f"Could not add header {key}: {e}")
+
+    def _add_telescope_headers(self, header,
+                                position: Optional[Dict[str, Any]],
+                                status: Optional[Dict[str, Any]]):
+        """Add telescope parameters to FITS header."""
+        if position:
+            # From TelescopePosition
+            header['TELRA'] = (position.get('ra', 'N/A'), 'Right Ascension')
+            header['TELDEC'] = (position.get('dec', 'N/A'), 'Declination')
+            header['TELHA'] = (position.get('ha', 'N/A'), 'Hour Angle')
+            header['TELLST'] = (position.get('lst', 'N/A'), 'Local Sidereal Time')
+            header['AIRMASS'] = (position.get('airmass', 'N/A'), 'Airmass')
+            header['TELUTC'] = (position.get('utc_time', 'N/A'), 'UTC time from TCS')
+            header['TELDAY'] = (position.get('utc_day', 'N/A'), 'UTC day number')
+
+        if status:
+            # From TelescopeStatus
+            header['TELFOCUS'] = (status.get('focus_mm', 'N/A'), 'Focus position (mm)')
+            header['TUBELEN'] = (status.get('tube_length_mm', 'N/A'), 'Tube length (mm)')
+            header['HIERARCH TEL OFFSET_RA'] = (status.get('offset_ra_arcsec', 'N/A'), 'RA offset (arcsec)')
+            header['HIERARCH TEL OFFSET_DEC'] = (status.get('offset_dec_arcsec', 'N/A'), 'Dec offset (arcsec)')
+            header['HIERARCH TEL RATE_RA'] = (status.get('rate_ra_arcsec_hr', 'N/A'), 'RA rate (arcsec/hr)')
+            header['HIERARCH TEL RATE_DEC'] = (status.get('rate_dec_arcsec_hr', 'N/A'), 'Dec rate (arcsec/hr)')
+            header['CASSRING'] = (status.get('cass_ring_angle', 'N/A'), 'Cass ring angle (deg)')
+            header['TELID'] = (status.get('telescope_id', 'N/A'), 'Telescope ID')
 
     def _add_timing_headers(self, header):
         """Add timing information to FITS header."""
