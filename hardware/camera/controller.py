@@ -12,6 +12,15 @@ from ..dcam import Dcam, Dcamapi, CAMERA_PARAMS
 logger = logging.getLogger(__name__)
 
 
+def _get_camera_config():
+    """Lazy load camera config to avoid circular imports."""
+    try:
+        from ...config import get_config
+        return get_config().camera
+    except Exception:
+        return None
+
+
 class DCamLock:
     """Thread-safe locking for DCAM operations."""
     _capture_lock = threading.RLock()
@@ -64,7 +73,7 @@ class CameraController:
             controller.disconnect()
     """
 
-    # Default camera settings
+    # Default camera settings (fallback if config not available)
     DEFAULT_SETTINGS = {
         'READOUT_SPEED': 1.0,
         'EXPOSURE_TIME': 1.0,
@@ -81,13 +90,23 @@ class CameraController:
         'HOT_PIXEL_CORRECT_LEVEL': 2.0
     }
 
-    def __init__(self, buffer_size: int = 100):
+    def __init__(self, buffer_size: int = None):
         """
         Initialize camera controller.
 
         Args:
-            buffer_size: Number of frames in capture ring buffer
+            buffer_size: Number of frames in capture ring buffer (uses config if None)
         """
+        # Load settings from config if available
+        config = _get_camera_config()
+        if config:
+            self._settings = dict(self.DEFAULT_SETTINGS)
+            self._settings.update(config.defaults)
+            buffer_size = buffer_size or config.buffer_size
+        else:
+            self._settings = dict(self.DEFAULT_SETTINGS)
+            buffer_size = buffer_size or 100
+
         self.dcam: Optional[Dcam] = None
         self.is_connected: bool = False
         self.buffer_size = buffer_size
@@ -595,9 +614,9 @@ class CameraController:
                     logger.error(f"Error in frame callback: {e}")
 
     def _apply_defaults(self):
-        """Apply default camera settings."""
+        """Apply default camera settings (from config or fallback)."""
         logger.info("Applying default camera settings")
-        for prop, value in self.DEFAULT_SETTINGS.items():
+        for prop, value in self._settings.items():
             self.set_property(prop, value)
 
     def _warmup_capture(self):

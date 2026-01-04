@@ -1,0 +1,91 @@
+{
+    "telescope": {
+        "host": "198.202.125.194",
+        "port": 49200,
+        "timeout_seconds": 30.0,
+        "focus_min_mm": 1.0,
+        "focus_max_mm": 74.0
+    },
+
+    "camera": {
+        "buffer_size": 100,
+        "defaults": {
+            "READOUT_SPEED": 1.0,
+            "EXPOSURE_TIME": 1.0,
+            "TRIGGER_MODE": 6.0,
+            "TRIGGER_SOURCE": 2.0,
+            "TRIGGER_POLARITY": 2.0,
+            "OUTPUT_TRIG_KIND_0": 3.0,
+            "OUTPUT_TRIG_ACTIVE_0": 1.0,
+            "OUTPUT_TRIG_POLARITY_0": 2.0,
+            "OUTPUT_TRIG_PERIOD_0": 10.0,
+            "SENSOR_MODE": 1.0,
+            "IMAGE_PIXEL_TYPE": 2.0,
+            "DEFECT_CORRECT_MODE": 1.0,
+            "HOT_PIXEL_CORRECT_LEVEL": 2.0
+        },
+        "capture_timeout_ms": 30000,
+        "align_to_second_offset": 0.10
+    },
+
+    "filterwheel": {
+        "library_path": "libEFWFilter.so.1.7",
+        "filters": {
+            "0": "clear",
+            "1": "u",
+            "2": "g",
+            "3": "r",
+            "4": "i",
+            "5": "z",
+            "6": "Ha",
+            "7": "OIII"
+        },
+        "focus_offsets_mm": {
+            "clear": 0.0,
+            "u": 0.0,
+            "g": 0.0,
+            "r": 0.0,
+            "i": 0.0,
+            "z": 0.0,
+            "Ha": 0.0,
+            "OIII": 0.0
+        }
+    },
+
+    "focusloop": {
+        "start_position_mm": 30.0,
+        "end_position_mm": 45.0,
+        "step_size_mm": 2.5,
+        "exposure_time_seconds": 5.0,
+        "settle_time_seconds": 2.0,
+        "max_fwhm_arcsec": 5.0,
+        "auto_apply_best": true
+    },
+
+    "instrument": {
+        "plate_scale_arcsec_per_pixel": 0.051,
+        "saturation_level_adu": 60000,
+        "min_fwhm_pixels": 5,
+        "timestamp_rollover_threshold": 4000,
+        "framestamp_rollover_threshold": 60000
+    },
+
+    "acquisition": {
+        "max_queue_size": 10000,
+        "max_pending_writes": 6,
+        "frames_per_cube": 1000,
+        "thread_pool_workers": 8,
+        "backpressure_threshold": 0.9
+    },
+
+    "paths": {
+        "default_output_dir": "/data/cerberus",
+        "focus_output_dir": "/tmp/cerberus_focus"
+    },
+
+    "gui": {
+        "status_update_interval_ms": 1000,
+        "default_object_name": "Object",
+        "default_focus_display_mm": 35.0
+    }
+}

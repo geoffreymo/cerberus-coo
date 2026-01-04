@@ -14,6 +14,7 @@ import numpy as np
 from ..hardware.camera import CameraController
 from ..hardware.telescope import TelescopeController
 from ..acquisition import FITSWriter
+from ..config import get_config
 from .state import SystemState
 
 logger = logging.getLogger(__name__)
@@ -477,12 +478,17 @@ class CerberusAPI:
 
         self._notify_status_change()
 
-    def set_filter(self, name: str) -> bool:
+    def set_filter(self, name: str, apply_focus_offset: bool = True) -> bool:
         """
-        Set filter by name.
+        Set filter by name, optionally applying focus offset.
+
+        When apply_focus_offset is True and the telescope is connected,
+        the focus will be adjusted based on the configured offset for
+        this filter relative to the previous filter.
 
         Args:
             name: Filter name
+            apply_focus_offset: Apply configured focus offset (default True)
 
         Returns:
             True if successful
@@ -492,11 +498,19 @@ class CerberusAPI:
             return False
 
         try:
+            # Get previous filter for offset calculation
+            previous_filter = self._state.current_filter
+
+            # Change filter
             self.filterwheel.filter = name
             self.filterwheel.wait_for_move()
 
             with self._state_lock:
                 self._state.current_filter = name
+
+            # Apply focus offset if requested and telescope is connected
+            if apply_focus_offset and self._state.telescope_connected and previous_filter:
+                self._apply_filter_focus_offset(previous_filter, name)
 
             self._notify_status_change()
             return True
@@ -504,6 +518,32 @@ class CerberusAPI:
         except Exception as e:
             logger.error(f"Failed to set filter: {e}")
             return False
+
+    def _apply_filter_focus_offset(self, from_filter: str, to_filter: str):
+        """
+        Apply focus offset when changing filters.
+
+        The offset is calculated as: new_focus = current_focus + (to_offset - from_offset)
+
+        Args:
+            from_filter: Previous filter name
+            to_filter: New filter name
+        """
+        try:
+            config = get_config()
+            from_offset = config.get_filter_focus_offset(from_filter)
+            to_offset = config.get_filter_focus_offset(to_filter)
+
+            delta = to_offset - from_offset
+
+            if abs(delta) > 0.001:  # Only move if significant difference
+                logger.info(f"Applying focus offset: {from_filter} -> {to_filter}: {delta:+.3f} mm")
+                self.offset_focus(delta)
+            else:
+                logger.debug(f"No focus offset needed: {from_filter} -> {to_filter}")
+
+        except Exception as e:
+            logger.warning(f"Could not apply focus offset: {e}")
 
     def get_filter(self) -> Optional[str]:
         """Get current filter name."""
@@ -516,6 +556,185 @@ class CerberusAPI:
         if self.filterwheel is None:
             return []
         return list(self.filterwheel.filters.values())
+
+    def get_filter_focus_offset(self, filter_name: str = None) -> float:
+        """
+        Get focus offset for a filter.
+
+        Args:
+            filter_name: Filter name (uses current filter if None)
+
+        Returns:
+            Focus offset in mm
+        """
+        if filter_name is None:
+            filter_name = self._state.current_filter
+        if filter_name is None:
+            return 0.0
+
+        config = get_config()
+        return config.get_filter_focus_offset(filter_name)
+
+    def set_filter_focus_offset(self, filter_name: str, offset_mm: float, save: bool = True) -> bool:
+        """
+        Set focus offset for a filter.
+
+        Args:
+            filter_name: Filter name
+            offset_mm: Focus offset in mm
+            save: Save to config file (default True)
+
+        Returns:
+            True if successful
+        """
+        try:
+            config = get_config()
+            config.filterwheel.focus_offsets_mm[filter_name] = offset_mm
+            logger.info(f"Set focus offset for {filter_name}: {offset_mm:.3f} mm")
+
+            if save:
+                self._save_config()
+
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set focus offset: {e}")
+            return False
+
+    def calibrate_filter_focus(self, reference_filter: str = None) -> bool:
+        """
+        Calibrate focus offsets for all filters.
+
+        Runs a focus loop for each filter and saves the difference from
+        a reference filter (defaults to current filter or first filter).
+
+        This is a long-running operation - run focus loop for each filter.
+
+        Args:
+            reference_filter: Reference filter name (offset = 0.0)
+
+        Returns:
+            True if successful
+        """
+        if not FOCUSLOOP_AVAILABLE:
+            logger.error("FocusLoop module not available")
+            return False
+
+        filters = self.get_available_filters()
+        if not filters:
+            logger.error("No filters available")
+            return False
+
+        # Use reference filter or current/first filter
+        if reference_filter is None:
+            reference_filter = self._state.current_filter or filters[0]
+
+        logger.info(f"Calibrating filter focus with reference: {reference_filter}")
+
+        # Run focus loop for each filter
+        best_focus_positions = {}
+
+        for filter_name in filters:
+            logger.info(f"Running focus loop for filter: {filter_name}")
+            self.set_filter(filter_name, apply_focus_offset=False)
+
+            result = self.run_focus_loop()
+            if result and result.success:
+                best_focus_positions[filter_name] = result.best_focus
+                logger.info(f"  Best focus for {filter_name}: {result.best_focus:.2f} mm")
+            else:
+                logger.warning(f"  Focus loop failed for {filter_name}")
+
+        # Calculate offsets relative to reference
+        if reference_filter not in best_focus_positions:
+            logger.error(f"Reference filter {reference_filter} failed")
+            return False
+
+        reference_focus = best_focus_positions[reference_filter]
+        logger.info(f"Reference focus ({reference_filter}): {reference_focus:.2f} mm")
+
+        for filter_name, best_focus in best_focus_positions.items():
+            offset = best_focus - reference_focus
+            self.set_filter_focus_offset(filter_name, offset, save=False)
+            logger.info(f"  {filter_name}: offset = {offset:+.3f} mm")
+
+        # Save all offsets
+        self._save_config()
+
+        # Return to reference filter
+        self.set_filter(reference_filter, apply_focus_offset=False)
+        self.set_focus(reference_focus)
+
+        return True
+
+    def _save_config(self):
+        """Save current config to file."""
+        try:
+            import json
+            from ..config import DEFAULT_CONFIG_PATH
+
+            config = get_config()
+
+            # Build config dict
+            config_dict = {
+                "telescope": {
+                    "host": config.telescope.host,
+                    "port": config.telescope.port,
+                    "timeout_seconds": config.telescope.timeout_seconds,
+                    "focus_min_mm": config.telescope.focus_min_mm,
+                    "focus_max_mm": config.telescope.focus_max_mm
+                },
+                "camera": {
+                    "buffer_size": config.camera.buffer_size,
+                    "defaults": config.camera.defaults,
+                    "capture_timeout_ms": config.camera.capture_timeout_ms,
+                    "align_to_second_offset": config.camera.align_to_second_offset
+                },
+                "filterwheel": {
+                    "library_path": config.filterwheel.library_path,
+                    "filters": config.filterwheel.filters,
+                    "focus_offsets_mm": config.filterwheel.focus_offsets_mm
+                },
+                "focusloop": {
+                    "start_position_mm": config.focusloop.start_position_mm,
+                    "end_position_mm": config.focusloop.end_position_mm,
+                    "step_size_mm": config.focusloop.step_size_mm,
+                    "exposure_time_seconds": config.focusloop.exposure_time_seconds,
+                    "settle_time_seconds": config.focusloop.settle_time_seconds,
+                    "max_fwhm_arcsec": config.focusloop.max_fwhm_arcsec,
+                    "auto_apply_best": config.focusloop.auto_apply_best
+                },
+                "instrument": {
+                    "plate_scale_arcsec_per_pixel": config.instrument.plate_scale_arcsec_per_pixel,
+                    "saturation_level_adu": config.instrument.saturation_level_adu,
+                    "min_fwhm_pixels": config.instrument.min_fwhm_pixels,
+                    "timestamp_rollover_threshold": config.instrument.timestamp_rollover_threshold,
+                    "framestamp_rollover_threshold": config.instrument.framestamp_rollover_threshold
+                },
+                "acquisition": {
+                    "max_queue_size": config.acquisition.max_queue_size,
+                    "max_pending_writes": config.acquisition.max_pending_writes,
+                    "frames_per_cube": config.acquisition.frames_per_cube,
+                    "thread_pool_workers": config.acquisition.thread_pool_workers,
+                    "backpressure_threshold": config.acquisition.backpressure_threshold
+                },
+                "paths": {
+                    "default_output_dir": config.paths.default_output_dir,
+                    "focus_output_dir": config.paths.focus_output_dir
+                },
+                "gui": {
+                    "status_update_interval_ms": config.gui.status_update_interval_ms,
+                    "default_object_name": config.gui.default_object_name,
+                    "default_focus_display_mm": config.gui.default_focus_display_mm
+                }
+            }
+
+            with open(DEFAULT_CONFIG_PATH, 'w') as f:
+                json.dump(config_dict, f, indent=4)
+
+            logger.info(f"Saved config to: {DEFAULT_CONFIG_PATH}")
+
+        except Exception as e:
+            logger.error(f"Failed to save config: {e}")
 
     # ==========================================================================
     # Focus Loop
@@ -566,9 +785,9 @@ class CerberusAPI:
             result = focus_loop.run()
 
             if result and result.success:
-                logger.info(f"Focus loop complete: optimal focus = {result.optimal_focus:.2f} mm")
-                # Apply optimal focus
-                self.set_focus(result.optimal_focus)
+                logger.info(f"Focus loop complete: best focus = {result.best_focus:.2f} mm")
+                # Apply best focus
+                self.set_focus(result.best_focus)
             else:
                 logger.warning("Focus loop did not find optimal focus")
 

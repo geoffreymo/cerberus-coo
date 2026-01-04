@@ -26,6 +26,15 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _get_telescope_config():
+    """Lazy load telescope config to avoid circular imports."""
+    try:
+        from ...config import get_config
+        return get_config().telescope
+    except Exception:
+        return None
+
+
 @dataclass
 class FocusStatus:
     """Current focus status."""
@@ -53,24 +62,38 @@ class TelescopeController:
             controller.disconnect()
     """
 
+    # Fallback defaults if config not available
     DEFAULT_HOST = "198.202.125.194"
     DEFAULT_PORT = 49200
+    DEFAULT_TIMEOUT = 30.0
 
-    def __init__(self, host: str = None, port: int = None, timeout: float = 30.0):
+    def __init__(self, host: str = None, port: int = None, timeout: float = None):
         """
         Initialize telescope controller.
 
         Args:
-            host: TCS IP address (default: P200 proxy)
-            port: TCP port (default: 49200)
-            timeout: Socket timeout in seconds
+            host: TCS IP address (uses config or default)
+            port: TCP port (uses config or default)
+            timeout: Socket timeout in seconds (uses config or default)
         """
         if not HALETCS_AVAILABLE:
             logger.warning("haletcs package not available")
 
-        self._host = host or self.DEFAULT_HOST
-        self._port = port or self.DEFAULT_PORT
-        self._timeout = timeout
+        # Load from config if available
+        config = _get_telescope_config()
+        if config:
+            self._host = host or config.host
+            self._port = port or config.port
+            self._timeout = timeout or config.timeout_seconds
+            self._focus_min = config.focus_min_mm
+            self._focus_max = config.focus_max_mm
+        else:
+            self._host = host or self.DEFAULT_HOST
+            self._port = port or self.DEFAULT_PORT
+            self._timeout = timeout or self.DEFAULT_TIMEOUT
+            self._focus_min = 1.0
+            self._focus_max = 74.0
+
         self._client: Optional[TCSClient] = None
         self._is_connected = False
 

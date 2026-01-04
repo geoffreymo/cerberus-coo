@@ -17,6 +17,15 @@ from astropy.io import fits
 logger = logging.getLogger(__name__)
 
 
+def _get_acquisition_config():
+    """Lazy load acquisition config to avoid circular imports."""
+    try:
+        from ..config import get_config
+        return get_config().acquisition
+    except Exception:
+        return None
+
+
 class FITSWriter:
     """
     Handles saving frames to FITS data cubes.
@@ -41,14 +50,29 @@ class FITSWriter:
         writer.stop()  # Flushes remaining frames
     """
 
-    def __init__(self, max_queue_size: int = 10000, max_pending_writes: int = 6):
+    def __init__(self, max_queue_size: int = None, max_pending_writes: int = None):
         """
         Initialize FITS writer.
 
         Args:
-            max_queue_size: Maximum frames to queue before backpressure
-            max_pending_writes: Maximum concurrent write operations
+            max_queue_size: Maximum frames to queue before backpressure (uses config if None)
+            max_pending_writes: Maximum concurrent write operations (uses config if None)
         """
+        # Load from config if available
+        config = _get_acquisition_config()
+        if config:
+            max_queue_size = max_queue_size or config.max_queue_size
+            max_pending_writes = max_pending_writes or config.max_pending_writes
+            self._frames_per_cube = config.frames_per_cube
+            self._thread_pool_workers = config.thread_pool_workers
+            self._backpressure_threshold = config.backpressure_threshold
+        else:
+            max_queue_size = max_queue_size or 10000
+            max_pending_writes = max_pending_writes or 6
+            self._frames_per_cube = 1000
+            self._thread_pool_workers = 8
+            self._backpressure_threshold = 0.9
+
         self._frame_queue: queue.Queue = queue.Queue(maxsize=max_queue_size)
         self._write_thread: Optional[threading.Thread] = None
         self._running = False
@@ -56,7 +80,6 @@ class FITSWriter:
         # Configuration
         self._output_dir = os.getcwd()
         self._object_name = "unknown"
-        self._frames_per_cube = 1000
         self._max_pending_writes = max_pending_writes
 
         # State
@@ -160,7 +183,7 @@ class FITSWriter:
         logger.info(f"Saving to: {self._save_folder}")
 
         # Start thread pool
-        self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="FITSWriter")
+        self._executor = ThreadPoolExecutor(max_workers=self._thread_pool_workers, thread_name_prefix="FITSWriter")
         self._pending_writes = []
 
         # Start write thread
@@ -207,7 +230,7 @@ class FITSWriter:
         max_size = self._frame_queue.maxsize
 
         # Backpressure: drop frames if queue is getting full
-        if queue_size > max_size * 0.9:
+        if queue_size > max_size * self._backpressure_threshold:
             self._total_frames_dropped += 1
             if self._total_frames_dropped % 100 == 1:
                 logger.error(f"Queue full ({queue_size}/{max_size}), dropping frames")
