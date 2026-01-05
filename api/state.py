@@ -37,6 +37,10 @@ class SystemState:
     telescope_focus: Optional[float] = None
     telescope_ra: Optional[str] = None
     telescope_dec: Optional[str] = None
+    telescope_ha: Optional[str] = None
+    telescope_lst: Optional[str] = None
+    telescope_airmass: Optional[float] = None
+    telescope_utc: Optional[str] = None
 
     # Filter wheel state
     filterwheel_connected: bool = False
@@ -76,6 +80,10 @@ class SystemState:
                 'focus': self.telescope_focus,
                 'ra': self.telescope_ra,
                 'dec': self.telescope_dec,
+                'ha': self.telescope_ha,
+                'lst': self.telescope_lst,
+                'airmass': self.telescope_airmass,
+                'utc': self.telescope_utc,
             },
             'filterwheel': {
                 'connected': self.filterwheel_connected,

@@ -26,6 +26,10 @@ class TelescopePanel(ttk.LabelFrame):
         self.current_focus_var = tk.StringVar(value="--")
         self.ra_var = tk.StringVar(value="--")
         self.dec_var = tk.StringVar(value="--")
+        self.ha_var = tk.StringVar(value="--")
+        self.lst_var = tk.StringVar(value="--")
+        self.airmass_var = tk.StringVar(value="--")
+        self.utc_var = tk.StringVar(value="--")
 
         # Offset move
         self.offset_ra_var = tk.StringVar(value="0")
@@ -47,15 +51,35 @@ class TelescopePanel(ttk.LabelFrame):
         self.status_label = ttk.Label(conn_frame, text="Disconnected")
         self.status_label.pack(side=tk.LEFT, padx=10)
 
-        # Position display
-        pos_frame = ttk.Frame(self)
-        pos_frame.pack(fill=tk.X, pady=2)
+        # Position display - Row 1: RA and Dec
+        pos_frame1 = ttk.Frame(self)
+        pos_frame1.pack(fill=tk.X, pady=2)
 
-        ttk.Label(pos_frame, text="RA:").pack(side=tk.LEFT)
-        ttk.Label(pos_frame, textvariable=self.ra_var, width=15).pack(side=tk.LEFT)
+        ttk.Label(pos_frame1, text="RA:").pack(side=tk.LEFT)
+        ttk.Label(pos_frame1, textvariable=self.ra_var, width=12).pack(side=tk.LEFT)
 
-        ttk.Label(pos_frame, text="Dec:").pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Label(pos_frame, textvariable=self.dec_var, width=15).pack(side=tk.LEFT)
+        ttk.Label(pos_frame1, text="Dec:").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(pos_frame1, textvariable=self.dec_var, width=12).pack(side=tk.LEFT)
+
+        # Position display - Row 2: HA and LST
+        pos_frame2 = ttk.Frame(self)
+        pos_frame2.pack(fill=tk.X, pady=2)
+
+        ttk.Label(pos_frame2, text="HA:").pack(side=tk.LEFT)
+        ttk.Label(pos_frame2, textvariable=self.ha_var, width=12).pack(side=tk.LEFT)
+
+        ttk.Label(pos_frame2, text="LST:").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(pos_frame2, textvariable=self.lst_var, width=12).pack(side=tk.LEFT)
+
+        # Position display - Row 3: Airmass and UTC
+        pos_frame3 = ttk.Frame(self)
+        pos_frame3.pack(fill=tk.X, pady=2)
+
+        ttk.Label(pos_frame3, text="Airmass:").pack(side=tk.LEFT)
+        ttk.Label(pos_frame3, textvariable=self.airmass_var, width=8).pack(side=tk.LEFT)
+
+        ttk.Label(pos_frame3, text="UTC:").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(pos_frame3, textvariable=self.utc_var, width=14).pack(side=tk.LEFT)
 
         # Separator
         ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
@@ -179,3 +203,7 @@ class TelescopePanel(ttk.LabelFrame):
 
         self.ra_var.set(state.telescope_ra or "--")
         self.dec_var.set(state.telescope_dec or "--")
+        self.ha_var.set(state.telescope_ha or "--")
+        self.lst_var.set(state.telescope_lst or "--")
+        self.airmass_var.set(f"{state.telescope_airmass:.3f}" if state.telescope_airmass else "--")
+        self.utc_var.set(state.telescope_utc or "--")

@@ -4,27 +4,37 @@ import json
 from pathlib import Path
 
 class FilterWheel:
-    def __init__(self, library_path='libEFWFilter.so.1.7', config_path=None):
+    def __init__(self, library_path='libEFWFilter.so.1.7', config_path=None, filters=None):
+        """
+        Initialize the filter wheel.
+
+        Args:
+            library_path: Path to the EFW library
+            config_path: Path to JSON config file (optional, legacy support)
+            filters: Dict mapping position (int or str) to filter name (preferred)
+        """
         # Preload libudev
         ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
         self.lib = ctypes.CDLL(library_path)
-        
+
         # Initialize
         num = self.lib.EFWGetNum()
         if num == 0:
             raise RuntimeError("No filter wheel found")
-        
+
         self.wheel_id = ctypes.c_int()
         self.lib.EFWGetID(0, ctypes.byref(self.wheel_id))
         self.lib.EFWOpen(self.wheel_id.value)
         time.sleep(0.5)  # Allow wheel to initialize
-        
+
         # Get number of slots
         self.num_slots = self._get_slot_count()
-        
-        # Load filter mapping
+
+        # Load filter mapping - prefer direct filters dict, fall back to config file
         self.filters = {}
-        if config_path:
+        if filters:
+            self.filters = {int(k): v for k, v in filters.items()}
+        elif config_path:
             self.load_config(config_path)
     
     def _get_slot_count(self):

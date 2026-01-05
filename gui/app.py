@@ -9,10 +9,12 @@ from typing import Optional
 from ..api import CerberusAPI
 from .panels import (
     CameraControlsPanel,
+    CameraSettingsPanel,
+    SubarrayPanel,
     ImageDisplayPanel,
-    OutputControlsPanel,
     TelescopePanel,
     FilterPanel,
+    FocusPanel,
     StatusBar,
 )
 
@@ -60,6 +62,10 @@ class CerberusGUI:
         # Start status update timer
         self._update_status()
 
+        # Auto-connect hardware after GUI is ready
+        #self.root.after(500, self._auto_connect_hardware)
+        self.root.after(500, self._auto_connect_filterwheel)
+
     def _configure_style(self):
         """Configure ttk style."""
         style = ttk.Style()
@@ -71,31 +77,63 @@ class CerberusGUI:
         elif 'alt' in available_themes:
             style.theme_use('alt')
 
+        # Configure larger fonts for better readability
+        default_font = ('TkDefaultFont', 12)
+        heading_font = ('TkDefaultFont', 14, 'bold')
+
+        style.configure('.', font=default_font)
+        style.configure('TLabel', font=default_font)
+        style.configure('TButton', font=default_font)
+        style.configure('TEntry', font=default_font)
+        style.configure('TCombobox', font=default_font)
+        style.configure('TLabelframe.Label', font=heading_font)
+        style.configure('TCheckbutton', font=default_font)
+        style.configure('TRadiobutton', font=default_font)
+
+        # Also set root window default font for tk widgets
+        self.root.option_add('*Font', default_font)
+
     def _create_layout(self):
         """Create the main layout with panels."""
         # Main container
         main_frame = ttk.Frame(self.root, padding=5)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Left column - Controls
-        left_frame = ttk.Frame(main_frame)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+        # Left side - Controls in two columns
+        controls_frame = ttk.Frame(main_frame)
+        controls_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
-        # Camera controls
-        self.camera_panel = CameraControlsPanel(left_frame, self.api)
+        # Left column 1 - Camera and Telescope
+        col1_frame = ttk.Frame(controls_frame)
+        col1_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+
+        # Camera controls (includes save)
+        self.camera_panel = CameraControlsPanel(col1_frame, self.api)
         self.camera_panel.pack(fill=tk.X, pady=(0, 5))
 
-        # Output controls
-        self.output_panel = OutputControlsPanel(left_frame, self.api)
-        self.output_panel.pack(fill=tk.X, pady=(0, 5))
-
         # Telescope panel
-        self.telescope_panel = TelescopePanel(left_frame, self.api)
+        self.telescope_panel = TelescopePanel(col1_frame, self.api)
         self.telescope_panel.pack(fill=tk.X, pady=(0, 5))
 
         # Filter panel
-        self.filter_panel = FilterPanel(left_frame, self.api)
+        self.filter_panel = FilterPanel(col1_frame, self.api)
         self.filter_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Left column 2 - Camera Settings, Subarray, Focus
+        col2_frame = ttk.Frame(controls_frame)
+        col2_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+
+        # Camera settings
+        self.settings_panel = CameraSettingsPanel(col2_frame, self.api)
+        self.settings_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Subarray controls
+        self.subarray_panel = SubarrayPanel(col2_frame, self.api)
+        self.subarray_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Focus loop panel
+        self.focus_panel = FocusPanel(col2_frame, self.api)
+        self.focus_panel.pack(fill=tk.X, pady=(0, 5))
 
         # Right column - Display
         right_frame = ttk.Frame(main_frame)
@@ -118,9 +156,11 @@ class CerberusGUI:
         """Update all panels from state."""
         try:
             self.camera_panel.update_from_state(state)
-            self.output_panel.update_from_state(state)
+            self.settings_panel.update_from_state(state)
+            self.subarray_panel.update_from_state(state)
             self.telescope_panel.update_from_state(state)
             self.filter_panel.update_from_state(state)
+            self.focus_panel.update_from_state(state)
             self.status_bar.update_from_state(state)
         except Exception as e:
             logger.error(f"Error updating panels: {e}")
@@ -135,6 +175,16 @@ class CerberusGUI:
 
         # Schedule next update
         self.root.after(1000, self._update_status)  # Every 1 second
+
+    def _auto_connect_filterwheel(self):
+        """Attempt to auto-connect the filter wheel on startup."""
+        try:
+            if self.api.connect_filterwheel():
+                logger.info("Filter wheel auto-connected")
+            else:
+                logger.info("Filter wheel not available for auto-connect")
+        except Exception as e:
+            logger.debug(f"Filter wheel auto-connect failed: {e}")
 
     def _on_close(self):
         """Handle window close."""

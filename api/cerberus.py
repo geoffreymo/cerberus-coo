@@ -359,6 +359,10 @@ class CerberusAPI:
                 if pos:
                     self._state.telescope_ra = pos.ra
                     self._state.telescope_dec = pos.dec
+                    self._state.telescope_ha = pos.ha
+                    self._state.telescope_lst = pos.lst
+                    self._state.telescope_airmass = pos.airmass
+                    self._state.telescope_utc = f"{pos.utc_day} {pos.utc_time}"
 
         self._notify_status_change()
         return success
@@ -373,6 +377,10 @@ class CerberusAPI:
             self._state.telescope_focus = None
             self._state.telescope_ra = None
             self._state.telescope_dec = None
+            self._state.telescope_ha = None
+            self._state.telescope_lst = None
+            self._state.telescope_airmass = None
+            self._state.telescope_utc = None
 
         self._notify_status_change()
 
@@ -436,8 +444,11 @@ class CerberusAPI:
         """
         Connect to the filter wheel.
 
+        Uses filter configuration from main config.json by default.
+        A separate config_path can be provided for legacy support.
+
         Args:
-            config_path: Path to filter configuration JSON
+            config_path: Path to filter configuration JSON (optional, uses main config if None)
 
         Returns:
             True if successful
@@ -448,7 +459,20 @@ class CerberusAPI:
 
         try:
             logger.info("Connecting to filter wheel...")
-            self.filterwheel = FilterWheel(config_path=config_path)
+            config = get_config()
+
+            if config_path:
+                # Legacy: use separate config file
+                self.filterwheel = FilterWheel(
+                    library_path=config.filterwheel.library_path,
+                    config_path=config_path
+                )
+            else:
+                # Use main config
+                self.filterwheel = FilterWheel(
+                    library_path=config.filterwheel.library_path,
+                    filters=config.filterwheel.filters
+                )
 
             with self._state_lock:
                 self._state.filterwheel_connected = True
@@ -740,15 +764,20 @@ class CerberusAPI:
     # Focus Loop
     # ==========================================================================
 
-    def run_focus_loop(self, config: 'FocusLoopConfig' = None) -> Optional['FocusResult']:
+    def run_focus_loop(self, config: 'FocusLoopConfig' = None,
+                        on_progress: Callable = None) -> Optional[Dict]:
         """
         Run automated focus loop.
 
+        Supports multi-filter focus runs when filterwheel is connected
+        and config.filters is specified.
+
         Args:
             config: Focus loop configuration
+            on_progress: Optional callback for progress updates
 
         Returns:
-            FocusResult with optimal focus, or None if failed
+            Dict mapping filter_name (or None) -> FocusResult, or None if failed
         """
         if not FOCUSLOOP_AVAILABLE:
             logger.error("FocusLoop module not available")
@@ -779,19 +808,27 @@ class CerberusAPI:
             focus_loop = FocusLoop(
                 camera=self.camera,
                 telescope=self.telescope,
+                filterwheel=self.filterwheel,
                 config=config
             )
 
-            result = focus_loop.run()
+            # Store reference for abort
+            self._focus_loop = focus_loop
 
-            if result and result.success:
-                logger.info(f"Focus loop complete: best focus = {result.best_focus:.2f} mm")
-                # Apply best focus
-                self.set_focus(result.best_focus)
-            else:
-                logger.warning("Focus loop did not find optimal focus")
+            # Set progress callback
+            if on_progress:
+                focus_loop.on_progress = on_progress
 
-            return result
+            results = focus_loop.run()
+
+            # Log results
+            for filter_name, result in results.items():
+                if result.success:
+                    fname = filter_name or "single"
+                    logger.info(f"Focus ({fname}): {result.best_focus:.2f} mm, "
+                               f"FWHM: {result.best_fwhm_arcsec:.2f}\"")
+
+            return results
 
         except Exception as e:
             logger.error(f"Focus loop error: {e}")
@@ -800,9 +837,16 @@ class CerberusAPI:
             return None
 
         finally:
+            self._focus_loop = None
             with self._state_lock:
                 self._state.focus_loop_running = False
             self._notify_status_change()
+
+    def abort_focus_loop(self):
+        """Abort a running focus loop."""
+        if hasattr(self, '_focus_loop') and self._focus_loop:
+            self._focus_loop.abort()
+            logger.info("Focus loop abort requested")
 
     # ==========================================================================
     # Callbacks
@@ -886,6 +930,10 @@ class CerberusAPI:
                 if pos:
                     self._state.telescope_ra = pos.ra
                     self._state.telescope_dec = pos.dec
+                    self._state.telescope_ha = pos.ha
+                    self._state.telescope_lst = pos.lst
+                    self._state.telescope_airmass = pos.airmass
+                    self._state.telescope_utc = f"{pos.utc_day} {pos.utc_time}"
 
             # Update filter wheel status
             if self._state.filterwheel_connected and self.filterwheel:

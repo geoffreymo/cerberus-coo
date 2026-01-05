@@ -2,7 +2,7 @@
 """Camera controls panel for Cerberus GUI."""
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,22 +13,43 @@ class CameraControlsPanel(ttk.LabelFrame):
     """
     Panel for camera control settings.
 
-    Includes exposure time, binning, trigger source, and capture controls.
+    Includes connection, exposure, streaming, and save controls.
     """
 
     def __init__(self, parent, api: 'CerberusAPI'):
         super().__init__(parent, text="Camera Controls", padding=5)
         self.api = api
 
-        # Variables
+        # Variables - Basic
         self.exposure_var = tk.StringVar(value="100")
-        self.binning_var = tk.StringVar(value="1")
-        self.trigger_var = tk.StringVar(value="External")
+
+        # Variables - Save
+        self.save_var = tk.BooleanVar(value=False)
+        self.object_name_var = tk.StringVar(value="Object")
+        self.output_dir_var = tk.StringVar(value="/data/cerberus")
+        self.frames_per_cube_var = tk.StringVar(value="1000")
+
+        # Stats
+        self.frames_saved_var = tk.StringVar(value="0")
+        self.cubes_saved_var = tk.StringVar(value="0")
+        self.frames_dropped_var = tk.StringVar(value="0")
 
         self._create_widgets()
 
     def _create_widgets(self):
         """Create panel widgets."""
+        # Connection row
+        conn_frame = ttk.Frame(self)
+        conn_frame.pack(fill=tk.X, pady=2)
+
+        self.connect_btn = ttk.Button(
+            conn_frame, text="Connect", command=self._on_connect
+        )
+        self.connect_btn.pack(side=tk.LEFT, padx=2)
+
+        self.status_label = ttk.Label(conn_frame, text="Disconnected")
+        self.status_label.pack(side=tk.LEFT, padx=10)
+
         # Exposure time
         exp_frame = ttk.Frame(self)
         exp_frame.pack(fill=tk.X, pady=2)
@@ -44,57 +65,82 @@ class CameraControlsPanel(ttk.LabelFrame):
             exp_frame, text="Set", command=self._on_exposure_change, width=5
         ).pack(side=tk.LEFT)
 
-        # Binning
-        bin_frame = ttk.Frame(self)
-        bin_frame.pack(fill=tk.X, pady=2)
-
-        ttk.Label(bin_frame, text="Binning:").pack(side=tk.LEFT)
-        self.binning_combo = ttk.Combobox(
-            bin_frame,
-            textvariable=self.binning_var,
-            values=["1", "2", "4"],
-            width=5,
-            state="readonly"
-        )
-        self.binning_combo.pack(side=tk.LEFT, padx=5)
-        self.binning_combo.bind('<<ComboboxSelected>>', self._on_binning_change)
-
-        # Trigger source
-        trig_frame = ttk.Frame(self)
-        trig_frame.pack(fill=tk.X, pady=2)
-
-        ttk.Label(trig_frame, text="Trigger:").pack(side=tk.LEFT)
-        self.trigger_combo = ttk.Combobox(
-            trig_frame,
-            textvariable=self.trigger_var,
-            values=["Internal", "External", "Software"],
-            width=10,
-            state="readonly"
-        )
-        self.trigger_combo.pack(side=tk.LEFT, padx=5)
-        self.trigger_combo.bind('<<ComboboxSelected>>', self._on_trigger_change)
-
-        # Separator
-        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
-
-        # Capture controls
+        # Start/Stop buttons
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, pady=2)
 
-        self.connect_btn = ttk.Button(
-            btn_frame, text="Connect", command=self._on_connect
-        )
-        self.connect_btn.pack(side=tk.LEFT, padx=2)
-
         self.start_btn = ttk.Button(
-            btn_frame, text="Start", command=self._on_start, state=tk.DISABLED
+            btn_frame, text="Start Streaming", command=self._on_start, state=tk.DISABLED
         )
         self.start_btn.pack(side=tk.LEFT, padx=2)
 
         self.stop_btn = ttk.Button(
-            btn_frame, text="Stop", command=self._on_stop, state=tk.DISABLED
+            btn_frame, text="Stop Streaming", command=self._on_stop, state=tk.DISABLED
         )
         self.stop_btn.pack(side=tk.LEFT, padx=2)
+
+        # Separator
+        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # Save checkbox
+        self.save_checkbox = ttk.Checkbutton(
+            self, text="Save Data to Disk", variable=self.save_var,
+            command=self._on_save_toggle
+        )
+        self.save_checkbox.pack(anchor=tk.W, pady=2)
+
+        # Object name
+        obj_frame = ttk.Frame(self)
+        obj_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(obj_frame, text="Object:").pack(side=tk.LEFT)
+        ttk.Entry(
+            obj_frame, textvariable=self.object_name_var, width=15
+        ).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        # Output directory
+        dir_frame = ttk.Frame(self)
+        dir_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(dir_frame, text="Directory:").pack(side=tk.LEFT)
+        ttk.Entry(
+            dir_frame, textvariable=self.output_dir_var, width=20
+        ).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        ttk.Button(
+            dir_frame, text="...", command=self._browse_directory, width=3
+        ).pack(side=tk.LEFT)
+
+        # Frames per cube
+        cube_frame = ttk.Frame(self)
+        cube_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(cube_frame, text="Frames/Cube:").pack(side=tk.LEFT)
+        ttk.Entry(
+            cube_frame, textvariable=self.frames_per_cube_var, width=8
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Stats row
+        stats_frame = ttk.Frame(self)
+        stats_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(stats_frame, text="Saved:").pack(side=tk.LEFT)
+        ttk.Label(stats_frame, textvariable=self.frames_saved_var, width=8).pack(side=tk.LEFT)
+
+        ttk.Label(stats_frame, text="Cubes:").pack(side=tk.LEFT)
+        ttk.Label(stats_frame, textvariable=self.cubes_saved_var, width=4).pack(side=tk.LEFT)
+
+        ttk.Label(stats_frame, text="Drop:").pack(side=tk.LEFT)
+        self.dropped_label = ttk.Label(stats_frame, textvariable=self.frames_dropped_var, width=6)
+        self.dropped_label.pack(side=tk.LEFT)
+
+    def _browse_directory(self):
+        """Open directory browser."""
+        directory = filedialog.askdirectory(
+            initialdir=self.output_dir_var.get(),
+            title="Select Output Directory"
+        )
+        if directory:
+            self.output_dir_var.set(directory)
 
     def _on_connect(self, event=None):
         """Handle connect button click."""
@@ -118,8 +164,16 @@ class CameraControlsPanel(ttk.LabelFrame):
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.NORMAL)
 
+            # Auto-start saving if checkbox is checked
+            if self.save_var.get():
+                self._start_saving()
+
     def _on_stop(self, event=None):
         """Handle stop button click."""
+        # Stop saving first if active
+        if self.api.state.is_saving:
+            self.api.stop_saving()
+
         self.api.stop_streaming()
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
@@ -133,23 +187,39 @@ class CameraControlsPanel(ttk.LabelFrame):
         except ValueError:
             pass
 
-    def _on_binning_change(self, event=None):
-        """Handle binning change."""
-        try:
-            binning = int(self.binning_var.get())
-            self.api.set_binning(binning)
-        except ValueError:
-            pass
+    def _on_save_toggle(self):
+        """Handle save checkbox toggle."""
+        if self.save_var.get():
+            # If streaming, start saving immediately
+            if self.api.state.camera_streaming:
+                self._start_saving()
+        else:
+            # Stop saving
+            if self.api.state.is_saving:
+                self.api.stop_saving()
 
-    def _on_trigger_change(self, event=None):
-        """Handle trigger source change."""
-        trigger = self.trigger_var.get().lower()
-        self.api.set_trigger_source(trigger)
+    def _start_saving(self):
+        """Start saving to disk."""
+        try:
+            frames_per_cube = int(self.frames_per_cube_var.get())
+        except ValueError:
+            frames_per_cube = 1000
+
+        success = self.api.start_saving(
+            object_name=self.object_name_var.get(),
+            output_dir=self.output_dir_var.get(),
+            frames_per_cube=frames_per_cube
+        )
+
+        if not success:
+            self.save_var.set(False)
 
     def update_from_state(self, state):
         """Update panel from system state."""
+        # Connection state
         if state.camera_connected:
             self.connect_btn.config(text="Disconnect")
+            self.status_label.config(text="Connected", foreground="green")
             if state.camera_streaming:
                 self.start_btn.config(state=tk.DISABLED)
                 self.stop_btn.config(state=tk.NORMAL)
@@ -158,8 +228,35 @@ class CameraControlsPanel(ttk.LabelFrame):
                 self.stop_btn.config(state=tk.DISABLED)
         else:
             self.connect_btn.config(text="Connect")
+            self.status_label.config(text="Disconnected", foreground="black")
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.DISABLED)
 
-        if state.camera_exposure:
-            self.exposure_var.set(str(int(state.camera_exposure * 1000)))
+        # Exposure - only update if not focused on the entry
+        if state.camera_exposure and self.root.focus_get() != self.exposure_entry:
+            current = self.exposure_var.get()
+            new_val = str(int(state.camera_exposure * 1000))
+            if current != new_val:
+                self.exposure_var.set(new_val)
+
+        # Save checkbox visual feedback - highlight when actively saving
+        if state.is_saving:
+            self.save_checkbox.config(style='Active.TCheckbutton')
+        else:
+            self.save_checkbox.config(style='TCheckbutton')
+
+        # Stats
+        self.frames_saved_var.set(str(state.frames_saved))
+        self.cubes_saved_var.set(str(state.cubes_saved))
+        self.frames_dropped_var.set(str(state.frames_dropped))
+
+        # Highlight drops in red
+        if state.frames_dropped > 0:
+            self.dropped_label.config(foreground="red")
+        else:
+            self.dropped_label.config(foreground="black")
+
+    @property
+    def root(self):
+        """Get the root window."""
+        return self.winfo_toplevel()
