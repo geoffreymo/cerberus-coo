@@ -62,6 +62,9 @@ class CerberusGUI:
         # Focus window reference
         self._focus_window = None
 
+        # Closing flag to prevent updates during shutdown
+        self._closing = False
+
         # Start status update timer
         self._update_status()
 
@@ -183,6 +186,10 @@ class CerberusGUI:
 
     def _update_panels(self, state):
         """Update all panels from state."""
+        # Skip updates if closing
+        if self._closing:
+            return
+
         try:
             self.camera_panel.update_from_state(state)
             self.settings_panel.update_from_state(state)
@@ -195,7 +202,9 @@ class CerberusGUI:
             if hasattr(self, '_focus_window') and self._focus_window and self._focus_window.winfo_exists():
                 self._focus_window.update_from_state(state)
         except Exception as e:
-            logger.error(f"Error updating panels: {e}")
+            # Ignore errors during shutdown
+            if not self._closing:
+                logger.error(f"Error updating panels: {e}")
 
     def _open_focus_window(self):
         """Open the focus loop window."""
@@ -211,6 +220,10 @@ class CerberusGUI:
 
     def _update_status(self):
         """Periodic status update."""
+        # Stop updates if closing
+        if self._closing:
+            return
+
         try:
             # Update API status (polls hardware)
             self.api.update_status()
@@ -252,6 +265,9 @@ class CerberusGUI:
 
     def _on_close(self):
         """Handle window close."""
+        # Set closing flag to stop updates
+        self._closing = True
+
         if messagebox.askokcancel("Quit", "Are you sure you want to quit?"):
             logger.info("Closing Cerberus GUI...")
 
@@ -275,6 +291,9 @@ class CerberusGUI:
                 logger.error(f"Error during cleanup: {e}")
 
             self.root.destroy()
+        else:
+            # User cancelled, resume updates
+            self._closing = False
 
     def run(self):
         """Start the GUI main loop."""
