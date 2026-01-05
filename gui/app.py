@@ -134,13 +134,13 @@ class CerberusGUI:
         self.camera_panel = CameraControlsPanel(col1_frame, self.api)
         self.camera_panel.pack(fill=tk.X, pady=(0, 5))
 
-        # Telescope panel
-        self.telescope_panel = TelescopePanel(col1_frame, self.api)
-        self.telescope_panel.pack(fill=tk.X, pady=(0, 5))
-
         # Filter panel
         self.filter_panel = FilterPanel(col1_frame, self.api)
         self.filter_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Telescope panel
+        self.telescope_panel = TelescopePanel(col1_frame, self.api)
+        self.telescope_panel.pack(fill=tk.X, pady=(0, 5))
 
         # Left column 2 - Camera Settings, Subarray, Focus
         col2_frame = ttk.Frame(controls_frame)

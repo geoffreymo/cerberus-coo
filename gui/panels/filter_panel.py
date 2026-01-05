@@ -2,7 +2,7 @@
 """Filter wheel controls panel for Cerberus GUI."""
 
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,7 +23,6 @@ class FilterPanel(ttk.LabelFrame):
         # Variables
         self.current_filter_var = tk.StringVar(value="--")
         self.selected_filter_var = tk.StringVar(value="")
-        self.config_path_var = tk.StringVar(value="")
 
         self._create_widgets()
 
@@ -40,18 +39,6 @@ class FilterPanel(ttk.LabelFrame):
 
         self.status_label = ttk.Label(conn_frame, text="Disconnected")
         self.status_label.pack(side=tk.LEFT, padx=10)
-
-        # Config path
-        config_frame = ttk.Frame(self)
-        config_frame.pack(fill=tk.X, pady=2)
-
-        ttk.Label(config_frame, text="Config:").pack(side=tk.LEFT)
-        ttk.Entry(
-            config_frame, textvariable=self.config_path_var, width=25
-        ).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(
-            config_frame, text="...", command=self._browse_config, width=3
-        ).pack(side=tk.LEFT)
 
         # Separator
         ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
@@ -83,15 +70,6 @@ class FilterPanel(ttk.LabelFrame):
             select_frame, text="Go", command=self._on_filter_change, width=5
         ).pack(side=tk.LEFT, padx=2)
 
-    def _browse_config(self):
-        """Open config file browser."""
-        filepath = filedialog.askopenfilename(
-            title="Select Filter Config",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
-        )
-        if filepath:
-            self.config_path_var.set(filepath)
-
     def _on_connect(self):
         """Handle connect button click."""
         if self.api.state.filterwheel_connected:
@@ -100,8 +78,7 @@ class FilterPanel(ttk.LabelFrame):
             self.status_label.config(text="Disconnected", foreground="black")
             self.filter_combo['values'] = []
         else:
-            config_path = self.config_path_var.get() or None
-            if self.api.connect_filterwheel(config_path=config_path):
+            if self.api.connect_filterwheel():
                 self.connect_btn.config(text="Disconnect")
                 self.status_label.config(text="Connected", foreground="green")
                 # Update filter list
