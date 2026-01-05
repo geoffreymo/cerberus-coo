@@ -382,7 +382,7 @@ class FITSWriter:
         self._cube_index += 1
         n_frames = self._buffer_index
 
-        filename = f"{self._object_name}_{self._start_time_str}_cube{self._cube_index:03d}.fits"
+        filename = f"{self._start_time_str}_{self._object_name}_cube{self._cube_index:03d}.fits"
         filepath = os.path.join(self._save_folder, filename)
         logger.info(f"Queuing cube {self._cube_index} ({n_frames} frames)")
 
