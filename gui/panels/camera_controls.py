@@ -200,18 +200,44 @@ class CameraControlsPanel(ttk.LabelFrame):
 
     def _start_saving(self):
         """Start saving to disk."""
+        import logging
+        import os
+        from tkinter import messagebox
+        logger = logging.getLogger(__name__)
+
         try:
             frames_per_cube = int(self.frames_per_cube_var.get())
         except ValueError:
             frames_per_cube = 1000
 
+        object_name = self.object_name_var.get()
+        output_dir = self.output_dir_var.get()
+
+        logger.info(f"_start_saving called: object={object_name}, dir={output_dir}, frames={frames_per_cube}")
+        logger.info(f"Camera streaming: {self.api.state.camera_streaming}")
+
+        # Check if output directory exists, create if not
+        if not os.path.exists(output_dir):
+            logger.info(f"Output directory does not exist, creating: {output_dir}")
+            try:
+                os.makedirs(output_dir, exist_ok=True)
+                logger.info(f"Created output directory: {output_dir}")
+            except Exception as e:
+                logger.error(f"Failed to create output directory: {e}")
+                messagebox.showerror("Directory Error", f"Cannot create output directory:\n{output_dir}\n\nError: {e}")
+                self.save_var.set(False)
+                return
+
         success = self.api.start_saving(
-            object_name=self.object_name_var.get(),
-            output_dir=self.output_dir_var.get(),
+            object_name=object_name,
+            output_dir=output_dir,
             frames_per_cube=frames_per_cube
         )
 
+        logger.info(f"start_saving returned: {success}")
+
         if not success:
+            logger.warning("start_saving failed, unchecking save checkbox")
             self.save_var.set(False)
 
     def update_from_state(self, state):
@@ -233,11 +259,15 @@ class CameraControlsPanel(ttk.LabelFrame):
             self.stop_btn.config(state=tk.DISABLED)
 
         # Exposure - only update if not focused on the entry
-        if state.camera_exposure and self.root.focus_get() != self.exposure_entry:
-            current = self.exposure_var.get()
-            new_val = str(int(state.camera_exposure * 1000))
-            if current != new_val:
-                self.exposure_var.set(new_val)
+        try:
+            if state.camera_exposure and self.root.focus_get() != self.exposure_entry:
+                current = self.exposure_var.get()
+                new_val = str(int(state.camera_exposure * 1000))
+                if current != new_val:
+                    self.exposure_var.set(new_val)
+        except (tk.TclError, AttributeError):
+            # Widget is being destroyed or window is closing
+            pass
 
         # Save checkbox visual feedback - highlight when actively saving
         if state.is_saving:

@@ -114,9 +114,16 @@ class FilterPanel(ttk.LabelFrame):
 
     def _on_filter_change(self):
         """Handle filter selection change."""
+        if not self.api.state.filterwheel_connected:
+            return
+
         selected = self.selected_filter_var.get()
         if selected:
-            self.api.set_filter(selected)
+            try:
+                self.api.set_filter(selected)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to set filter: {e}")
 
     def update_from_state(self, state):
         """Update panel from system state."""

@@ -915,38 +915,71 @@ class CerberusAPI:
 
     def update_status(self):
         """Update system status from hardware."""
+        # Read hardware values outside lock to avoid holding lock during slow I/O
+        camera_exposure = None
+        camera_temp = None
+        telescope_focus = None
+        telescope_pos = None
+        current_filter = None
+        frames_written = 0
+        frames_dropped = 0
+        cubes_written = 0
+
+        # Check connection status with minimal lock
         with self._state_lock:
-            # Update camera status
-            if self._state.camera_connected:
-                self._state.camera_exposure = self.camera.get_exposure()
-                temp = self.camera.get_property('SENSOR_TEMPERATURE')
-                if temp:
-                    self._state.camera_temperature = temp
+            camera_connected = self._state.camera_connected
+            telescope_connected = self._state.telescope_connected
+            filterwheel_connected = self._state.filterwheel_connected
+            is_saving = self._state.is_saving
 
-            # Update telescope status
-            if self._state.telescope_connected:
-                self._state.telescope_focus = self.telescope.get_focus()
-                pos = self.telescope.get_position()
-                if pos:
-                    self._state.telescope_ra = pos.ra
-                    self._state.telescope_dec = pos.dec
-                    self._state.telescope_ha = pos.ha
-                    self._state.telescope_lst = pos.lst
-                    self._state.telescope_airmass = pos.airmass
-                    self._state.telescope_utc = f"{pos.utc_day} {pos.utc_time}"
+        # Read hardware (no lock held - allows concurrent operations)
+        try:
+            if camera_connected:
+                camera_exposure = self.camera.get_exposure()
+                camera_temp = self.camera.get_property('SENSOR_TEMPERATURE')
 
-            # Update filter wheel status
-            if self._state.filterwheel_connected and self.filterwheel:
-                self._state.current_filter = self.filterwheel.filter
+            if telescope_connected:
+                telescope_focus = self.telescope.get_focus()
+                telescope_pos = self.telescope.get_position()
 
-            # Update acquisition status
-            if self._state.is_saving:
-                self._state.frames_saved = self.writer.frames_written
-                self._state.frames_dropped = self.writer.frames_dropped
-                self._state.cubes_saved = self.writer.cubes_written
+            if filterwheel_connected and self.filterwheel:
+                current_filter = self.filterwheel.filter
 
-        # Refresh telescope data in writer for next cube (outside lock)
-        if self._state.is_saving and self._state.telescope_connected:
+            if is_saving:
+                frames_written = self.writer.frames_written
+                frames_dropped = self.writer.frames_dropped
+                cubes_written = self.writer.cubes_written
+
+        except Exception as e:
+            logger.error(f"Error reading hardware status: {e}")
+
+        # Update state with lock (fast - just assignments)
+        with self._state_lock:
+            if camera_connected:
+                self._state.camera_exposure = camera_exposure
+                if camera_temp:
+                    self._state.camera_temperature = camera_temp
+
+            if telescope_connected:
+                self._state.telescope_focus = telescope_focus
+                if telescope_pos:
+                    self._state.telescope_ra = telescope_pos.ra
+                    self._state.telescope_dec = telescope_pos.dec
+                    self._state.telescope_ha = telescope_pos.ha
+                    self._state.telescope_lst = telescope_pos.lst
+                    self._state.telescope_airmass = telescope_pos.airmass
+                    self._state.telescope_utc = f"{telescope_pos.utc_day} {telescope_pos.utc_time}"
+
+            if filterwheel_connected:
+                self._state.current_filter = current_filter
+
+            if is_saving:
+                self._state.frames_saved = frames_written
+                self._state.frames_dropped = frames_dropped
+                self._state.cubes_saved = cubes_written
+
+        # Refresh telescope data in writer for next cube (outside lock, use local copy)
+        if is_saving and telescope_connected:
             self._update_writer_telescope_data()
 
         self._notify_status_change()

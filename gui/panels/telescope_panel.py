@@ -164,28 +164,46 @@ class TelescopePanel(ttk.LabelFrame):
 
     def _on_focus_go(self):
         """Handle focus go button click."""
+        if not self.api.state.telescope_connected:
+            return
+
         try:
             focus = float(self.focus_var.get())
             self.api.set_focus(focus)
         except ValueError:
             pass
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set focus: {e}")
 
     def _on_focus_offset(self, direction: int):
         """Handle focus offset button click."""
+        if not self.api.state.telescope_connected:
+            return
+
         try:
             offset = float(self.focus_offset_var.get()) * direction
             self.api.offset_focus(offset)
         except ValueError:
             pass
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to offset focus: {e}")
 
     def _on_move_offset(self):
         """Handle move offset button click."""
+        if not self.api.state.telescope_connected:
+            return
+
         try:
             ra = float(self.offset_ra_var.get())
             dec = float(self.offset_dec_var.get())
             self.api.move_offset(ra, dec)
         except ValueError:
             pass
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to move offset: {e}")
 
     def update_from_state(self, state):
         """Update panel from system state."""

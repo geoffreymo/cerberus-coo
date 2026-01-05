@@ -32,6 +32,7 @@ class FocusPanel(ttk.LabelFrame):
 
         # Filter checkboxes state
         self.filter_vars = {}
+        self._last_filters = []  # Track filter list to avoid unnecessary updates
 
         self._create_widgets()
 
@@ -161,6 +162,11 @@ class FocusPanel(ttk.LabelFrame):
 
         filters = self._get_selected_filters()
 
+        # Validate filter selection if filterwheel is connected
+        if self.api.state.filterwheel_connected and not filters:
+            self.progress_var.set("Error: No filters selected")
+            return
+
         # Update UI
         self.start_btn.config(state=tk.DISABLED)
         self.abort_btn.config(state=tk.NORMAL)
@@ -188,9 +194,10 @@ class FocusPanel(ttk.LabelFrame):
                 filters=filters
             )
 
-            # Progress callback
+            # Progress callback - MUST use after() for thread safety with Tkinter
             def on_progress(progress):
-                self.progress_var.set(progress.message)
+                # Schedule GUI update in main thread
+                self.after(0, lambda msg=progress.message: self.progress_var.set(msg))
 
             results = self.api.run_focus_loop(config=config, on_progress=on_progress)
 
@@ -233,13 +240,15 @@ class FocusPanel(ttk.LabelFrame):
 
     def update_from_state(self, state):
         """Update panel from system state."""
-        # Update filter checkboxes if filterwheel connected
+        # Update filter checkboxes only when filter list changes
         if state.filterwheel_connected and state.available_filters:
-            if not self.filter_vars:  # Only update if not already populated
+            if state.available_filters != self._last_filters:
                 self._update_filter_checkboxes(state.available_filters)
+                self._last_filters = state.available_filters[:]  # Make a copy
         elif not state.filterwheel_connected:
-            if self.filter_vars:  # Clear if was populated
+            if self._last_filters:  # Only clear if we had filters before
                 self._update_filter_checkboxes([])
+                self._last_filters = []
 
         # Update button states based on focus loop status
         if state.focus_loop_running:

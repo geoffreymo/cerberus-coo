@@ -115,58 +115,107 @@ class CameraSettingsPanel(ttk.LabelFrame):
 
     def _on_binning_change(self, event=None):
         """Handle binning change."""
-        value = self.binning_var.get()
-        binning_map = {"1x1": 1, "2x2": 2, "4x4": 4}
-        if value in binning_map:
-            self.api.set_binning(binning_map[value])
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.binning_var.get()
+            binning_map = {"1x1": 1, "2x2": 2, "4x4": 4}
+            if value in binning_map:
+                self.api.set_binning(binning_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set binning: {e}")
 
     def _on_readout_change(self, event=None):
         """Handle readout speed change."""
-        value = self.readout_speed_var.get()
-        # READOUT_SPEED: 1.0 = Ultra Quiet, 2.0 = Standard
-        speed_map = {"Ultra Quiet": 1.0, "Standard": 2.0}
-        if value in speed_map:
-            self.api.set_camera_property("READOUT_SPEED", speed_map[value])
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.readout_speed_var.get()
+            # READOUT_SPEED: 1.0 = Ultra Quiet, 2.0 = Standard
+            speed_map = {"Ultra Quiet": 1.0, "Standard": 2.0}
+            if value in speed_map:
+                self.api.set_camera_property("READOUT_SPEED", speed_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set readout speed: {e}")
 
     def _on_sensor_mode_change(self, event=None):
         """Handle sensor mode change."""
-        value = self.sensor_mode_var.get()
-        # SENSOR_MODE: 1.0 = Standard, 12.0 = Photon Number Resolving
-        mode_map = {"Standard": 1.0, "Photon Number": 12.0}
-        if value in mode_map:
-            self.api.set_camera_property("SENSOR_MODE", mode_map[value])
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.sensor_mode_var.get()
+            # SENSOR_MODE: 1.0 = Standard, 12.0 = Photon Number Resolving
+            mode_map = {"Standard": 1.0, "Photon Number": 12.0}
+            if value in mode_map:
+                self.api.set_camera_property("SENSOR_MODE", mode_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set sensor mode: {e}")
 
     def _on_trigger_source_change(self, event=None):
         """Handle trigger source change."""
-        value = self.trigger_source_var.get()
-        # TRIGGER_SOURCE: 1.0 = Internal, 2.0 = External, 3.0 = Software
-        source_map = {"Internal": 1.0, "External": 2.0, "Software": 3.0}
-        if value in source_map:
-            self.api.set_camera_property("TRIGGER_SOURCE", source_map[value])
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.trigger_source_var.get()
+            # TRIGGER_SOURCE: 1.0 = Internal, 2.0 = External, 3.0 = Software
+            source_map = {"Internal": 1.0, "External": 2.0, "Software": 3.0}
+            if value in source_map:
+                self.api.set_camera_property("TRIGGER_SOURCE", source_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set trigger source: {e}")
 
     def _on_trigger_mode_change(self, event=None):
         """Handle trigger mode change."""
-        value = self.trigger_mode_var.get()
-        # TRIGGER_MODE: 1.0 = Normal, 6.0 = Start
-        mode_map = {"Normal": 1.0, "Start": 6.0}
-        if value in mode_map:
-            self.api.set_camera_property("TRIGGER_MODE", mode_map[value])
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.trigger_mode_var.get()
+            # TRIGGER_MODE: 1.0 = Normal, 6.0 = Start
+            mode_map = {"Normal": 1.0, "Start": 6.0}
+            if value in mode_map:
+                self.api.set_camera_property("TRIGGER_MODE", mode_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set trigger mode: {e}")
 
     def _on_defect_correct_change(self, event=None):
         """Handle defect correction change."""
-        value = self.defect_correct_var.get()
-        # DEFECT_CORRECT_MODE: 1.0 = OFF, 2.0 = ON
-        mode_map = {"OFF": 1.0, "ON": 2.0}
-        if value in mode_map:
-            self.api.set_camera_property("DEFECT_CORRECT_MODE", mode_map[value])
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.defect_correct_var.get()
+            # DEFECT_CORRECT_MODE: 1.0 = OFF, 2.0 = ON
+            mode_map = {"OFF": 1.0, "ON": 2.0}
+            if value in mode_map:
+                self.api.set_camera_property("DEFECT_CORRECT_MODE", mode_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set defect correction: {e}")
 
     def _on_hot_pixel_change(self, event=None):
         """Handle hot pixel level change."""
-        value = self.hot_pixel_var.get()
-        # HOT_PIXEL_CORRECT_LEVEL: 1.0 = Standard, 2.0 = Minimum, 3.0 = Aggressive
-        level_map = {"STANDARD": 1.0, "MINIMUM": 2.0, "AGGRESSIVE": 3.0}
-        if value in level_map:
-            self.api.set_camera_property("HOT_PIXEL_CORRECT_LEVEL", level_map[value])
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.hot_pixel_var.get()
+            # HOT_PIXEL_CORRECT_LEVEL: 1.0 = Standard, 2.0 = Minimum, 3.0 = Aggressive
+            level_map = {"STANDARD": 1.0, "MINIMUM": 2.0, "AGGRESSIVE": 3.0}
+            if value in level_map:
+                self.api.set_camera_property("HOT_PIXEL_CORRECT_LEVEL", level_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set hot pixel level: {e}")
 
     def update_from_state(self, state):
         """Update panel from system state."""

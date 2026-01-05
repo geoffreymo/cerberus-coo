@@ -63,8 +63,7 @@ class CerberusGUI:
         self._update_status()
 
         # Auto-connect hardware after GUI is ready
-        #self.root.after(500, self._auto_connect_hardware)
-        self.root.after(500, self._auto_connect_filterwheel)
+        self.root.after(500, self._auto_connect_hardware)
 
     # def _configure_style(self):
     #     """Configure ttk style."""
@@ -200,8 +199,28 @@ class CerberusGUI:
         # Schedule next update
         self.root.after(1000, self._update_status)  # Every 1 second
 
+    def _auto_connect_hardware(self):
+        """Attempt to auto-connect hardware on startup."""
+        # Auto-connect camera
+        try:
+            if self.api.connect_camera():
+                logger.info("Camera auto-connected")
+            else:
+                logger.info("Camera not available for auto-connect")
+        except Exception as e:
+            logger.debug(f"Camera auto-connect failed: {e}")
+
+        # Auto-connect filterwheel
+        try:
+            if self.api.connect_filterwheel():
+                logger.info("Filter wheel auto-connected")
+            else:
+                logger.info("Filter wheel not available for auto-connect")
+        except Exception as e:
+            logger.debug(f"Filter wheel auto-connect failed: {e}")
+
     def _auto_connect_filterwheel(self):
-        """Attempt to auto-connect the filter wheel on startup."""
+        """Attempt to auto-connect filterwheel on startup (legacy method)."""
         try:
             if self.api.connect_filterwheel():
                 logger.info("Filter wheel auto-connected")
