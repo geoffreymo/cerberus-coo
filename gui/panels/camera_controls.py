@@ -1,6 +1,7 @@
 # gui/panels/camera_controls.py
 """Camera controls panel for Cerberus GUI."""
 
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog
 from typing import TYPE_CHECKING
@@ -250,15 +251,18 @@ class CameraControlsPanel(ttk.LabelFrame):
         """Handle start/stop button click."""
         if self.api.state.camera_streaming:
             # Currently streaming - STOP
-            # Stop saving first if active
-            if self.api.state.is_saving:
-                self.api.stop_saving()
-
+            # Stop camera first to prevent new frames
             self.api.stop_streaming()
             self.start_stop_btn.config(text="Start")
 
             # Stop streaming timer
             self._stop_stream_timer()
+
+            # Brief pause for in-flight frames to be delivered
+            import time
+            if self.api.state.is_saving:
+                time.sleep(0.05)
+                self.api.stop_saving()
 
             # Reset take images state if was running
             if self._taking_images:

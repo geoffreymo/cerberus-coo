@@ -77,8 +77,8 @@ class CameraController:
     DEFAULT_SETTINGS = {
         'READOUT_SPEED': 1.0,
         'EXPOSURE_TIME': 1.0,
-        'TRIGGER_MODE': 6.0,      # Start mode
-        'TRIGGER_SOURCE': 2.0,    # External
+        'TRIGGER_MODE': 1.0,      # Normal mode
+        'TRIGGER_SOURCE': 1.0,    # Internal
         'TRIGGER_POLARITY': 2.0,  # Positive edge
         'OUTPUT_TRIG_KIND_0': 3.0,
         'OUTPUT_TRIG_ACTIVE_0': 1.0,
@@ -90,12 +90,13 @@ class CameraController:
         'HOT_PIXEL_CORRECT_LEVEL': 2.0
     }
 
-    def __init__(self, buffer_size: int = None):
+    def __init__(self, buffer_size: int = None, save_queue=None):
         """
         Initialize camera controller.
 
         Args:
             buffer_size: Number of frames in capture ring buffer (uses config if None)
+            save_queue: Optional queue.Queue for saving frames (v18 architecture)
         """
         # Load settings from config if available
         config = _get_camera_config()
@@ -110,6 +111,9 @@ class CameraController:
         self.dcam: Optional[Dcam] = None
         self.is_connected: bool = False
         self.buffer_size = buffer_size
+
+        # Save queue for v18 architecture (ProcessPoolExecutor)
+        self.save_queue = save_queue
 
         # Capture state
         self._capture_thread: Optional[threading.Thread] = None
@@ -487,6 +491,7 @@ class CameraController:
                 daemon=True
             )
             self._capture_thread.start()
+            logger.info("Capture thread started")
 
             return True
 
@@ -553,10 +558,23 @@ class CameraController:
     def _capture_loop(self):
         """Main capture loop (runs in separate thread)."""
         timeout_ms = 10
+        loop_count = 0
+        wait_success_count = 0
+        getframe_fail_count = 0
+
+        logger.info("Capture loop starting")
 
         while self._capturing and not self._stop_requested.is_set():
             try:
+                loop_count += 1
+
+                # Log first few iterations
+                if loop_count <= 5:
+                    logger.info(f"Capture loop iteration {loop_count}")
+
                 if not DCamLock.acquire_capture(timeout=0.005):
+                    if loop_count <= 5:
+                        logger.info(f"Iteration {loop_count}: Could not acquire DCamLock")
                     continue
 
                 try:
@@ -565,10 +583,16 @@ class CameraController:
 
                     # Wait for frame
                     if self.dcam.wait_capevent_frameready(timeout_ms):
+                        wait_success_count += 1
+                        if wait_success_count <= 5:
+                            logger.info(f"wait_capevent_frameready succeeded (count={wait_success_count})")
+
                         frame_idx = self._frame_index % self.buffer_size
                         result = self.dcam.buf_getframe_with_timestamp_and_framestamp(frame_idx)
 
                         if result is not False:
+                            if wait_success_count <= 5:
+                                logger.info(f"buf_getframe succeeded, processing frame")
                             frame, npBuf, timestamp, framestamp = result
                             frame_copy = np.copy(npBuf)
 
@@ -577,6 +601,14 @@ class CameraController:
                             # Process frame
                             self._process_frame(frame_copy, timestamp, framestamp)
                             continue
+                        else:
+                            getframe_fail_count += 1
+                            if getframe_fail_count <= 5:
+                                logger.warning(f"buf_getframe returned False (count={getframe_fail_count})")
+                    else:
+                        # wait_capevent_frameready timed out
+                        if loop_count <= 5:
+                            logger.info(f"Iteration {loop_count}: wait_capevent_frameready timed out")
 
                 finally:
                     DCamLock.release_capture()
@@ -584,6 +616,8 @@ class CameraController:
             except Exception as e:
                 logger.error(f"Error in capture loop: {e}")
                 time.sleep(0.001)
+
+        logger.info(f"Capture loop ended: {loop_count} iterations, {wait_success_count} frames ready, {getframe_fail_count} getframe failures")
 
     def _process_frame(self, frame: np.ndarray, timestamp, framestamp: int):
         """Process captured frame and deliver to callbacks."""
@@ -604,6 +638,20 @@ class CameraController:
 
         self._frame_count += 1
         self._frame_index += 1
+
+        # Log frame capture
+        if self._frame_count == 1 or self._frame_count % 100 == 0:
+            queue_status = f", queue: {self.save_queue.qsize()}" if self.save_queue else ""
+            logger.info(f"Captured {self._frame_count} frames, delivering to {len(self._frame_callbacks)} callbacks{queue_status}")
+
+        # Put frame in save queue if enabled (v18 architecture)
+        if self.save_queue is not None:
+            try:
+                import queue
+                self.save_queue.put_nowait((frame, corrected_timestamp, corrected_framestamp))
+            except queue.Full:
+                if self._frame_count % 100 == 0:
+                    logger.warning("Save queue full - dropping frames")
 
         # Deliver to callbacks
         with self._callback_lock:

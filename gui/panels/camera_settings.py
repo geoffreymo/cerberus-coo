@@ -25,8 +25,8 @@ class CameraSettingsPanel(ttk.LabelFrame):
         self.binning_var = tk.StringVar(value="1x1")
         self.readout_speed_var = tk.StringVar(value="Standard")
         self.sensor_mode_var = tk.StringVar(value="Standard")
-        self.trigger_source_var = tk.StringVar(value="External")
-        self.trigger_mode_var = tk.StringVar(value="Start")
+        self.trigger_source_var = tk.StringVar(value="Internal")
+        self.trigger_mode_var = tk.StringVar(value="Normal")
         self.defect_correct_var = tk.StringVar(value="OFF")
         self.hot_pixel_var = tk.StringVar(value="MINIMUM")
 

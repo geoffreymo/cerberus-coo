@@ -234,24 +234,29 @@ class CerberusGUI:
         self.root.after(1000, self._update_status)  # Every 1 second
 
     def _auto_connect_hardware(self):
-        """Attempt to auto-connect hardware on startup."""
-        # Auto-connect camera
-        try:
-            if self.api.connect_camera():
-                logger.info("Camera auto-connected")
-            else:
-                logger.info("Camera not available for auto-connect")
-        except Exception as e:
-            logger.debug(f"Camera auto-connect failed: {e}")
+        """Attempt to auto-connect hardware on startup (in background)."""
+        import threading
 
-        # Auto-connect filterwheel
-        try:
-            if self.api.connect_filterwheel():
-                logger.info("Filter wheel auto-connected")
-            else:
-                logger.info("Filter wheel not available for auto-connect")
-        except Exception as e:
-            logger.debug(f"Filter wheel auto-connect failed: {e}")
+        def connect_thread():
+            # Auto-connect camera
+            try:
+                if self.api.connect_camera():
+                    logger.info("Camera auto-connected")
+                else:
+                    logger.info("Camera not available for auto-connect")
+            except Exception as e:
+                logger.debug(f"Camera auto-connect failed: {e}")
+
+            # Auto-connect filterwheel
+            try:
+                if self.api.connect_filterwheel():
+                    logger.info("Filter wheel auto-connected")
+                else:
+                    logger.info("Filter wheel not available for auto-connect")
+            except Exception as e:
+                logger.debug(f"Filter wheel auto-connect failed: {e}")
+
+        threading.Thread(target=connect_thread, daemon=True).start()
 
     def _auto_connect_filterwheel(self):
         """Attempt to auto-connect filterwheel on startup (legacy method)."""
@@ -277,10 +282,14 @@ class CerberusGUI:
 
             # Cleanup API
             try:
-                if self.api.state.is_saving:
-                    self.api.stop_saving()
+                # Stop streaming first to prevent new frames
                 if self.api.state.camera_streaming:
                     self.api.stop_streaming()
+                # Brief pause for in-flight frames
+                if self.api.state.is_saving:
+                    import time
+                    time.sleep(0.05)
+                    self.api.stop_saving()
                 if self.api.state.camera_connected:
                     self.api.disconnect_camera()
                 if self.api.state.telescope_connected:

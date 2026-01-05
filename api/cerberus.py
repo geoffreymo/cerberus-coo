@@ -13,7 +13,8 @@ import numpy as np
 
 from ..hardware.camera import CameraController
 from ..hardware.telescope import TelescopeController
-from ..acquisition import FITSWriter
+from ..acquisition import FITSWriter  # Keep for backwards compatibility
+from ..acquisition.save_thread import OptimizedSaveThread
 from ..config import get_config
 from .state import SystemState
 
@@ -73,10 +74,16 @@ class CerberusAPI:
 
     def __init__(self):
         """Initialize the Cerberus API."""
-        # Hardware controllers
+        # Save queue for v18 architecture (ProcessPoolExecutor)
+        self.save_queue: Optional[queue.Queue] = None
+        self.save_thread: Optional[OptimizedSaveThread] = None
+
+        # Hardware controllers (camera gets save_queue later when saving starts)
         self.camera = CameraController()
         self.telescope = TelescopeController()
         self.filterwheel: Optional['FilterWheel'] = None
+
+        # Keep old writer for backwards compatibility (unused in v18 architecture)
         self.writer = FITSWriter()
 
         # System state
@@ -281,38 +288,38 @@ class CerberusAPI:
 
         logger.info(f"Starting save: {object_name} to {output_dir}")
 
-        # Configure timing info
-        timing_info = {
-            'time_before_cap_start': self.camera.time_before_cap_start,
-            'time_after_cap_start': self.camera.time_after_cap_start,
-            'exposure_time': self.camera.get_exposure(),
-            'trigger_source': self.camera.get_property('TRIGGER_SOURCE'),
-        }
+        # Create save queue (large capacity for high-speed capture)
+        self.save_queue = queue.Queue(maxsize=50000)
 
-        # Configure and start writer
-        self.writer.configure(
-            output_dir=output_dir,
+        # Give camera access to the save queue
+        self.camera.save_queue = self.save_queue
+
+        # Build header dict with timing and telescope info
+        header_dict = {}
+        if comment:
+            header_dict['COMMENT'] = (comment, 'User comment')
+
+        # Create date-based subdirectory
+        from datetime import datetime
+        import os
+        date_str = datetime.now().strftime('%Y_%m_%d')
+        save_folder = os.path.join(output_dir, f"captures_{date_str}")
+
+        # Create and start save thread (v18 architecture with ProcessPoolExecutor)
+        self.save_thread = OptimizedSaveThread(
+            save_queue=self.save_queue,
+            output_dir=save_folder,
             object_name=object_name,
+            header_dict=header_dict,
             frames_per_cube=frames_per_cube,
-            timing_info=timing_info,
-            comment=comment
+            camera_params=self.camera.get_all_params()
         )
-        self.writer.set_camera_params(self.camera.get_all_params())
-
-        # Set initial telescope data if connected
-        self._update_writer_telescope_data()
-
-        # Set callback for on-demand telescope queries (per-cube, at first frame)
-        if self._state.telescope_connected:
-            self.writer.set_telescope_callback(self._get_telescope_data_for_cube)
-            logger.info("Telescope callback configured for per-cube queries")
-
-        self.writer.start()
+        self.save_thread.start()
 
         with self._state_lock:
             self._state.is_saving = True
             self._state.save_object_name = object_name
-            self._state.save_output_dir = output_dir
+            self._state.save_output_dir = save_folder
             self._state.frames_saved = 0
             self._state.frames_dropped = 0
             self._state.cubes_saved = 0
@@ -323,19 +330,35 @@ class CerberusAPI:
     def stop_saving(self):
         """Stop saving frames."""
         logger.info("Stopping save...")
-        self.writer.stop()
 
+        # Set is_saving=False FIRST so camera stops putting frames in queue
         with self._state_lock:
             self._state.is_saving = False
-            self._state.frames_saved = self.writer.frames_written
-            self._state.frames_dropped = self.writer.frames_dropped
-            self._state.cubes_saved = self.writer.cubes_written
+
+        # Remove save queue from camera
+        self.camera.save_queue = None
+
+        # Stop and join save thread (v18 architecture)
+        if self.save_thread and self.save_thread.is_alive():
+            self.save_thread.stop()
+            self.save_thread.join(timeout=60)  # Wait up to 60s for writes to complete
+
+            # Update stats from save thread
+            with self._state_lock:
+                self._state.frames_saved = self.save_thread.total_frames_saved
+                self._state.frames_dropped = self.save_thread.total_frames_dropped
+                self._state.cubes_saved = self.save_thread.cubes_written
+
+            self.save_thread = None
+
+        # Clear save queue
+        self.save_queue = None
 
         self._notify_status_change()
 
     def is_saving(self) -> bool:
         """Check if currently saving."""
-        return self.writer.is_running
+        return self.save_thread is not None and self.save_thread.is_alive()
 
     # ==========================================================================
     # Telescope Control
@@ -1071,10 +1094,15 @@ class CerberusAPI:
         """Internal handler for camera frames."""
         with self._state_lock:
             self._state.camera_frames_captured += 1
+            frames_captured = self._state.camera_frames_captured
+            is_saving = self._state.is_saving
 
-        # Forward to writer if saving
-        if self._state.is_saving:
-            self.writer.add_frame(frame, timestamp, framestamp)
+        # Log periodically
+        if frames_captured % 100 == 1:
+            logger.info(f"API received frame {frames_captured}, is_saving={is_saving}")
+
+        # Note: Frames are sent to save_queue directly by camera controller (v18 architecture)
+        # No need to forward to writer here
 
         # Update display queue (keep only latest)
         try:

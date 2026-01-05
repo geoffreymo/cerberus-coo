@@ -246,10 +246,16 @@ class FITSWriter:
             framestamp: Frame counter from camera
         """
         if not self._running:
+            logger.warning(f"add_frame called but writer not running (_running={self._running})")
             return
 
         queue_size = self._frame_queue.qsize()
         max_size = self._frame_queue.maxsize
+
+        # Log periodically
+        frames_queued = self._total_frames_saved + queue_size
+        if frames_queued % 100 == 1:
+            logger.info(f"Writer received frame, queue_size={queue_size}, total_saved={self._total_frames_saved}")
 
         # Backpressure: drop frames if queue is getting full
         if queue_size > max_size * self._backpressure_threshold:

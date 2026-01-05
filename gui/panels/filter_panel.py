@@ -1,6 +1,7 @@
 # gui/panels/filter_panel.py
 """Filter wheel controls panel for Cerberus GUI."""
 
+import threading
 import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
