@@ -23,6 +23,18 @@ class CameraControlsPanel(ttk.LabelFrame):
         # Variables - Basic
         self.exposure_var = tk.StringVar(value="100")
 
+        # Variables - Take N Images
+        self.n_images_var = tk.StringVar(value="1")
+        self.image_progress_var = tk.StringVar(value="")
+        self._taking_images = False
+        self._target_frames = 0
+        self._start_frame_count = 0
+
+        # Variables - Streaming timer
+        self.stream_time_var = tk.StringVar(value="")
+        self._stream_start_time = 0
+        self._timer_after_id = None
+
         # Variables - Save
         self.save_var = tk.BooleanVar(value=False)
         self.object_name_var = tk.StringVar(value="Object")
@@ -78,6 +90,29 @@ class CameraControlsPanel(ttk.LabelFrame):
             btn_frame, text="Stop Streaming", command=self._on_stop, state=tk.DISABLED
         )
         self.stop_btn.pack(side=tk.LEFT, padx=2)
+
+        # Streaming timer
+        self.stream_timer_label = ttk.Label(btn_frame, textvariable=self.stream_time_var)
+        self.stream_timer_label.pack(side=tk.LEFT, padx=10)
+
+        # Take N Images section
+        take_frame = ttk.Frame(self)
+        take_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(take_frame, text="Take").pack(side=tk.LEFT)
+        ttk.Entry(
+            take_frame, textvariable=self.n_images_var, width=5
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(take_frame, text="images:").pack(side=tk.LEFT)
+
+        self.take_btn = ttk.Button(
+            take_frame, text="Take Images", command=self._on_take_images, state=tk.DISABLED
+        )
+        self.take_btn.pack(side=tk.LEFT, padx=5)
+
+        # Image progress
+        self.progress_label = ttk.Label(take_frame, textvariable=self.image_progress_var)
+        self.progress_label.pack(side=tk.LEFT, padx=5)
 
         # Separator
         ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
@@ -164,6 +199,9 @@ class CameraControlsPanel(ttk.LabelFrame):
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.NORMAL)
 
+            # Start streaming timer
+            self._start_stream_timer()
+
             # Auto-start saving if checkbox is checked
             if self.save_var.get():
                 self._start_saving()
@@ -177,6 +215,14 @@ class CameraControlsPanel(ttk.LabelFrame):
         self.api.stop_streaming()
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
+
+        # Stop streaming timer
+        self._stop_stream_timer()
+
+        # Reset take images state if was running
+        if self._taking_images:
+            self._taking_images = False
+            self.image_progress_var.set("")
 
     def _on_exposure_change(self, event=None):
         """Handle exposure change."""
@@ -240,6 +286,82 @@ class CameraControlsPanel(ttk.LabelFrame):
             logger.warning("start_saving failed, unchecking save checkbox")
             self.save_var.set(False)
 
+    def _start_stream_timer(self):
+        """Start the streaming timer."""
+        import time
+        self._stream_start_time = time.time()
+        self._update_stream_timer()
+
+    def _stop_stream_timer(self):
+        """Stop the streaming timer."""
+        if self._timer_after_id:
+            self.after_cancel(self._timer_after_id)
+            self._timer_after_id = None
+        self.stream_time_var.set("")
+
+    def _update_stream_timer(self):
+        """Update streaming timer display."""
+        import time
+        if self._stream_start_time > 0:
+            elapsed = int(time.time() - self._stream_start_time)
+            hours = elapsed // 3600
+            minutes = (elapsed % 3600) // 60
+            seconds = elapsed % 60
+
+            if hours > 0:
+                time_str = f"Streaming: {hours:02d}h {minutes:02d}m {seconds:02d}s"
+            elif minutes > 0:
+                time_str = f"Streaming: {minutes:02d}m {seconds:02d}s"
+            else:
+                time_str = f"Streaming: {seconds:02d}s"
+
+            self.stream_time_var.set(time_str)
+
+            # Schedule next update
+            self._timer_after_id = self.after(1000, self._update_stream_timer)
+
+    def _on_take_images(self):
+        """Handle take N images button click."""
+        try:
+            n_images = int(self.n_images_var.get())
+            if n_images < 1:
+                return
+        except ValueError:
+            return
+
+        # Start streaming
+        if not self.api.state.camera_streaming:
+            if self.api.start_streaming():
+                self.start_btn.config(state=tk.DISABLED)
+                self.stop_btn.config(state=tk.NORMAL)
+                self._start_stream_timer()
+            else:
+                return
+
+        # Set up take images mode
+        self._taking_images = True
+        self._target_frames = n_images
+        self._start_frame_count = self.api.state.camera_frames_captured
+        self.image_progress_var.set(f"Taking: 0 / {n_images}")
+
+    def _check_image_progress(self, current_frames):
+        """Check if we've captured enough images."""
+        if self._taking_images:
+            frames_captured = current_frames - self._start_frame_count
+            self.image_progress_var.set(f"Taking: {frames_captured} / {self._target_frames}")
+
+            # Check if done
+            if frames_captured >= self._target_frames:
+                self._taking_images = False
+                self.image_progress_var.set(f"Done: {frames_captured} images")
+
+                # Auto-stop streaming
+                if self.api.state.camera_streaming:
+                    self.api.stop_streaming()
+                    self.start_btn.config(state=tk.NORMAL)
+                    self.stop_btn.config(state=tk.DISABLED)
+                    self._stop_stream_timer()
+
     def update_from_state(self, state):
         """Update panel from system state."""
         # Connection state
@@ -249,14 +371,21 @@ class CameraControlsPanel(ttk.LabelFrame):
             if state.camera_streaming:
                 self.start_btn.config(state=tk.DISABLED)
                 self.stop_btn.config(state=tk.NORMAL)
+                self.take_btn.config(state=tk.DISABLED)  # Can't take while already streaming
             else:
                 self.start_btn.config(state=tk.NORMAL)
                 self.stop_btn.config(state=tk.DISABLED)
+                self.take_btn.config(state=tk.NORMAL)  # Enable take images
         else:
             self.connect_btn.config(text="Connect")
             self.status_label.config(text="Disconnected", foreground="black")
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.DISABLED)
+            self.take_btn.config(state=tk.DISABLED)
+
+        # Check image progress if taking images
+        if self._taking_images and state.camera_streaming:
+            self._check_image_progress(state.camera_frames_captured)
 
         # Exposure - only update if not focused on the entry
         try:
