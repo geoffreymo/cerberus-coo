@@ -71,7 +71,7 @@ class SubarrayPanel(ttk.LabelFrame):
         )
         self.vsize_entry.grid(row=1, column=3, padx=2)
 
-        # Apply button
+        # Apply and Reset buttons
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, pady=2)
 
@@ -79,6 +79,11 @@ class SubarrayPanel(ttk.LabelFrame):
             btn_frame, text="Apply", command=self._on_apply, state=tk.DISABLED
         )
         self.apply_btn.pack(side=tk.LEFT, padx=2)
+
+        self.reset_btn = ttk.Button(
+            btn_frame, text="Reset to Full Frame", command=self._on_reset
+        )
+        self.reset_btn.pack(side=tk.LEFT, padx=2)
 
         # Note
         note_label = ttk.Label(
@@ -131,6 +136,18 @@ class SubarrayPanel(ttk.LabelFrame):
 
         except ValueError:
             pass
+
+    def _on_reset(self):
+        """Reset subarray to full frame."""
+        # Disable subarray mode first
+        self.enabled_var.set(False)
+        self._on_enable_toggle()
+
+        # Reset to full frame values
+        self.hpos_var.set("0")
+        self.hsize_var.set("4096")
+        self.vpos_var.set("0")
+        self.vsize_var.set("2304")
 
     def update_from_state(self, state):
         """Update panel from system state."""
