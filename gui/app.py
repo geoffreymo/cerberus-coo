@@ -66,32 +66,56 @@ class CerberusGUI:
         #self.root.after(500, self._auto_connect_hardware)
         self.root.after(500, self._auto_connect_filterwheel)
 
+    # def _configure_style(self):
+    #     """Configure ttk style."""
+    #     style = ttk.Style()
+
+    #     # Try to use a modern theme if available
+    #     available_themes = style.theme_names()
+    #     if 'clam' in available_themes:
+    #         style.theme_use('clam')
+    #     elif 'alt' in available_themes:
+    #         style.theme_use('alt')
+
+    #     # Configure larger fonts for better readability
+    #     default_font = ('TkDefaultFont', 12)
+    #     heading_font = ('TkDefaultFont', 14, 'bold')
+
+    #     style.configure('.', font=default_font)
+    #     style.configure('TLabel', font=default_font)
+    #     style.configure('TButton', font=default_font)
+    #     style.configure('TEntry', font=default_font)
+    #     style.configure('TCombobox', font=default_font)
+    #     style.configure('TLabelframe.Label', font=heading_font)
+    #     style.configure('TCheckbutton', font=default_font)
+    #     style.configure('TRadiobutton', font=default_font)
+
+    #     # Also set root window default font for tk widgets
+    #     self.root.option_add('*Font', default_font)
     def _configure_style(self):
-        """Configure ttk style."""
+        """Configure Tk / ttk style in a minimal, sane way."""
+        from tkinter import font
+        from tkinter import ttk
+
         style = ttk.Style()
 
-        # Try to use a modern theme if available
-        available_themes = style.theme_names()
-        if 'clam' in available_themes:
-            style.theme_use('clam')
-        elif 'alt' in available_themes:
-            style.theme_use('alt')
+        # Use a decent base theme (clam is safest if not using ttkbootstrap)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
 
-        # Configure larger fonts for better readability
-        default_font = ('TkDefaultFont', 12)
-        heading_font = ('TkDefaultFont', 14, 'bold')
+        # Modify the named default font IN PLACE
+        default_font = font.nametofont("TkDefaultFont")
+        default_font.configure(
+            family="Ubuntu",  # or "Noto Sans"
+            size=16
+        )
 
-        style.configure('.', font=default_font)
-        style.configure('TLabel', font=default_font)
-        style.configure('TButton', font=default_font)
-        style.configure('TEntry', font=default_font)
-        style.configure('TCombobox', font=default_font)
-        style.configure('TLabelframe.Label', font=heading_font)
-        style.configure('TCheckbutton', font=default_font)
-        style.configure('TRadiobutton', font=default_font)
+        # Make headings slightly heavier via a named style only
+        style.configure(
+            "TLabelframe.Label",
+            font=(default_font.actual("family"), 16, "normal")
+        )
 
-        # Also set root window default font for tk widgets
-        self.root.option_add('*Font', default_font)
 
     def _create_layout(self):
         """Create the main layout with panels."""
