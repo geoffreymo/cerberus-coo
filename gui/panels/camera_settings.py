@@ -27,7 +27,7 @@ class CameraSettingsPanel(ttk.LabelFrame):
         self.sensor_mode_var = tk.StringVar(value="Standard")
         self.trigger_source_var = tk.StringVar(value="External")
         self.trigger_mode_var = tk.StringVar(value="Start")
-        self.defect_correct_var = tk.StringVar(value="ON")
+        self.defect_correct_var = tk.StringVar(value="OFF")
         self.hot_pixel_var = tk.StringVar(value="MINIMUM")
 
         self._create_widgets()
