@@ -117,6 +117,12 @@ class FITSWriter:
         self._telescope_position: Optional[Dict[str, Any]] = None
         self._telescope_status: Optional[Dict[str, Any]] = None
 
+        # Telescope data callback for querying on first frame of each cube
+        self._telescope_data_callback = None
+
+        # Per-cube telescope data (queried when first frame of cube arrives)
+        self._cube_telescope_data: Dict[int, tuple] = {}  # cube_index -> (position, status)
+
     def configure(
         self,
         output_dir: str,
@@ -155,6 +161,19 @@ class FITSWriter:
         with self._params_lock:
             self._telescope_position = position
             self._telescope_status = status
+
+    def set_telescope_callback(self, callback):
+        """
+        Set callback for querying telescope data on-demand.
+
+        The callback should return (position_dict, status_dict) when called.
+        This will be called when the first frame of each cube arrives,
+        ensuring telescope data matches the time of the first exposure.
+
+        Args:
+            callback: Callable that returns (position_dict, status_dict)
+        """
+        self._telescope_data_callback = callback
 
     def start(self):
         """Start the writer thread."""
@@ -286,12 +305,23 @@ class FITSWriter:
                         try:
                             frame, timestamp, framestamp = self._frame_queue.get(timeout=0.001)
 
-                            # Track first frame
+                            # Track first frame ever
                             if self._first_frame_timestamp is None:
                                 self._first_frame_timestamp = timestamp
                                 self._timing_info['first_frame_timestamp'] = timestamp
                                 self._timing_info['time_first_frame_arrived'] = time.time()
                                 logger.info(f"First frame arrived: camera time {timestamp:.6f}s")
+
+                            # Query telescope data on first frame of each NEW cube
+                            if self._buffer_index == 0 and self._telescope_data_callback:
+                                try:
+                                    next_cube_idx = self._cube_index + 1
+                                    pos, status = self._telescope_data_callback()
+                                    self._cube_telescope_data[next_cube_idx] = (pos, status)
+                                    logger.debug(f"Queried telescope data for cube {next_cube_idx} at first frame")
+                                except Exception as e:
+                                    logger.warning(f"Failed to query telescope data for cube: {e}")
+                                    self._cube_telescope_data[next_cube_idx] = (None, None)
 
                             # Lazy buffer allocation
                             if self._frame_buffer is None:
@@ -369,11 +399,21 @@ class FITSWriter:
             self._timestamp_buffer = np.empty_like(timestamps)
             self._framestamp_buffer = np.empty_like(framestamps)
 
-        # Get camera and telescope params
+        # Get camera params
         with self._params_lock:
             camera_params = dict(self._camera_params)
-            telescope_position = dict(self._telescope_position) if self._telescope_position else None
-            telescope_status = dict(self._telescope_status) if self._telescope_status else None
+
+        # Get telescope data for THIS specific cube (queried at first frame)
+        # Fall back to global cached data if per-cube data not available
+        if self._cube_index in self._cube_telescope_data:
+            telescope_position, telescope_status = self._cube_telescope_data[self._cube_index]
+            logger.debug(f"Using per-cube telescope data for cube {self._cube_index}")
+        else:
+            # Fallback to global cached data (old behavior)
+            with self._params_lock:
+                telescope_position = dict(self._telescope_position) if self._telescope_position else None
+                telescope_status = dict(self._telescope_status) if self._telescope_status else None
+            logger.debug(f"Using cached telescope data for cube {self._cube_index}")
 
         # Submit to thread pool
         write_start = time.time()
@@ -384,7 +424,8 @@ class FITSWriter:
             telescope_position, telescope_status, write_start
         )
 
-        self._pending_writes.append((filepath, future, n_frames))
+        # Track cube index for cleanup after write completes
+        self._pending_writes.append((filepath, future, n_frames, self._cube_index))
         self._total_frames_saved += n_frames
         self._buffer_index = 0
 
@@ -548,7 +589,7 @@ class FITSWriter:
     def _check_pending_writes(self):
         """Check status of pending writes."""
         completed = []
-        for filepath, future, n_frames in self._pending_writes:
+        for filepath, future, n_frames, cube_idx in self._pending_writes:
             if future.done():
                 try:
                     if not future.result(timeout=0):
@@ -557,7 +598,12 @@ class FITSWriter:
                 except Exception as e:
                     logger.error(f"Write error: {e}")
                     self._total_frames_dropped += n_frames
-                completed.append((filepath, future, n_frames))
+
+                # Clean up per-cube telescope data after write completes
+                if cube_idx in self._cube_telescope_data:
+                    del self._cube_telescope_data[cube_idx]
+
+                completed.append((filepath, future, n_frames, cube_idx))
 
         for item in completed:
             self._pending_writes.remove(item)
@@ -567,7 +613,7 @@ class FITSWriter:
 
     def _wait_for_pending_writes(self):
         """Wait for all pending writes to complete."""
-        for i, (filepath, future, n_frames) in enumerate(self._pending_writes, 1):
+        for i, (filepath, future, n_frames, cube_idx) in enumerate(self._pending_writes, 1):
             try:
                 logger.info(f"Waiting for write {i}/{len(self._pending_writes)}")
                 if not future.result(timeout=60):
@@ -577,7 +623,12 @@ class FITSWriter:
                 logger.error(f"Final write error: {e}")
                 self._total_frames_dropped += n_frames
 
+            # Clean up per-cube telescope data
+            if cube_idx in self._cube_telescope_data:
+                del self._cube_telescope_data[cube_idx]
+
         self._pending_writes.clear()
+        self._cube_telescope_data.clear()  # Final cleanup
 
     def _report_progress(self):
         """Report save progress periodically."""

@@ -296,8 +296,13 @@ class CerberusAPI:
         )
         self.writer.set_camera_params(self.camera.get_all_params())
 
-        # Set telescope data if connected
+        # Set initial telescope data if connected
         self._update_writer_telescope_data()
+
+        # Set callback for on-demand telescope queries (per-cube, at first frame)
+        if self._state.telescope_connected:
+            self.writer.set_telescope_callback(self._get_telescope_data_for_cube)
+            logger.info("Telescope callback configured for per-cube queries")
 
         self.writer.start()
 
@@ -988,13 +993,22 @@ class CerberusAPI:
     # Private Methods
     # ==========================================================================
 
-    def _update_writer_telescope_data(self):
-        """Update the FITS writer with current telescope data."""
+    def _get_telescope_data_for_cube(self):
+        """
+        Query fresh telescope data for a cube (called at first frame).
+
+        This is used as a callback by the writer to get telescope data
+        at the exact moment the first frame of each cube arrives,
+        ensuring accurate telescope position/status for that cube.
+
+        Returns:
+            tuple: (position_dict, status_dict) or (None, None) if unavailable
+        """
         if not self._state.telescope_connected:
-            return
+            return (None, None)
 
         try:
-            # Get position and status from telescope
+            # Query telescope NOW (using persistent socket connection)
             position = self.telescope.get_position()
             status = self.telescope.get_status()
 
@@ -1027,6 +1041,20 @@ class CerberusAPI:
                     'utc_day': status.utc_day,
                 }
 
+            return (position_dict, status_dict)
+
+        except Exception as e:
+            logger.warning(f"Could not query telescope data for cube: {e}")
+            return (None, None)
+
+    def _update_writer_telescope_data(self):
+        """Update the FITS writer with current telescope data (for fallback)."""
+        if not self._state.telescope_connected:
+            return
+
+        try:
+            # Get current telescope data
+            position_dict, status_dict = self._get_telescope_data_for_cube()
             self.writer.set_telescope_data(position_dict, status_dict)
 
         except Exception as e:
