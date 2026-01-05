@@ -180,7 +180,7 @@ class CameraController:
                 logger.info("=== CAMERA PROPERTIES ===")
                 with self._params_lock:
                     for prop_name in sorted(self._camera_params.keys()):
-                        logger.debug(f"  {prop_name}: {self._camera_params[prop_name]}")
+                        logger.info(f"  {prop_name}: {self._camera_params[prop_name]}")
 
                 self.is_connected = True
 
