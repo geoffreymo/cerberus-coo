@@ -73,21 +73,38 @@ class FilterPanel(ttk.LabelFrame):
     def _on_connect(self):
         """Handle connect button click."""
         if self.api.state.filterwheel_connected:
+            # Disconnect is fast, can do synchronously
             self.api.disconnect_filterwheel()
             self.connect_btn.config(text="Connect")
             self.status_label.config(text="Disconnected", foreground="black")
             self.filter_combo['values'] = []
         else:
-            if self.api.connect_filterwheel():
-                self.connect_btn.config(text="Disconnect")
-                self.status_label.config(text="Connected", foreground="green")
-                # Update filter list
-                filters = self.api.get_available_filters()
-                self.filter_combo['values'] = filters
-                if filters:
-                    self.selected_filter_var.set(filters[0])
-            else:
-                self.status_label.config(text="Failed", foreground="red")
+            # Connection is slow, do in background thread
+            import threading
+            self.connect_btn.config(state=tk.DISABLED)
+            self.status_label.config(text="Connecting...", foreground="orange")
+
+            def connect_thread():
+                success = self.api.connect_filterwheel()
+                # Update GUI in main thread
+                self.after(0, lambda: self._on_connect_complete(success))
+
+            threading.Thread(target=connect_thread, daemon=True).start()
+
+    def _on_connect_complete(self, success):
+        """Called when filterwheel connection completes."""
+        self.connect_btn.config(state=tk.NORMAL)
+
+        if success:
+            self.connect_btn.config(text="Disconnect")
+            self.status_label.config(text="Connected", foreground="green")
+            # Update filter list
+            filters = self.api.get_available_filters()
+            self.filter_combo['values'] = filters
+            if filters:
+                self.selected_filter_var.set(filters[0])
+        else:
+            self.status_label.config(text="Failed", foreground="red")
 
     def _on_filter_change(self):
         """Handle filter selection change."""

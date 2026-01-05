@@ -204,27 +204,47 @@ class CameraControlsPanel(ttk.LabelFrame):
     def _on_connect(self, event=None):
         """Handle connect button click."""
         if self.api.state.camera_connected:
+            # Disconnect is fast, can do synchronously
             self.api.disconnect_camera()
             self.connect_btn.config(text="Connect")
             self.start_stop_btn.config(state=tk.DISABLED)
         else:
-            if self.api.connect_camera():
-                self.connect_btn.config(text="Disconnect")
-                self.start_stop_btn.config(state=tk.NORMAL)
-                # Update exposure from camera
-                exp = self.api.get_exposure()
-                if exp:
-                    # Convert to current unit
-                    unit = self.exposure_unit_var.get()
-                    if unit == "ms":
-                        exp_display = exp * 1000.0
-                    elif unit == "s":
-                        exp_display = exp
-                    elif unit == "min":
-                        exp_display = exp / 60.0
-                    else:
-                        exp_display = exp * 1000.0
-                    self.exposure_var.set(str(exp_display))
+            # Connection is slow, do in background thread
+            self.connect_btn.config(state=tk.DISABLED)
+            self.status_label.config(text="Connecting...", foreground="orange")
+
+            def connect_thread():
+                success = self.api.connect_camera()
+                # Update GUI in main thread
+                self.after(0, lambda: self._on_connect_complete(success))
+
+            threading.Thread(target=connect_thread, daemon=True).start()
+
+    def _on_connect_complete(self, success):
+        """Called when camera connection completes."""
+        self.connect_btn.config(state=tk.NORMAL)
+
+        if success:
+            self.connect_btn.config(text="Disconnect")
+            self.start_stop_btn.config(state=tk.NORMAL)
+            self.status_label.config(text="Connected", foreground="green")
+
+            # Update exposure from camera
+            exp = self.api.get_exposure()
+            if exp:
+                # Convert to current unit
+                unit = self.exposure_unit_var.get()
+                if unit == "ms":
+                    exp_display = exp * 1000.0
+                elif unit == "s":
+                    exp_display = exp
+                elif unit == "min":
+                    exp_display = exp / 60.0
+                else:
+                    exp_display = exp * 1000.0
+                self.exposure_var.set(str(exp_display))
+        else:
+            self.status_label.config(text="Failed", foreground="red")
 
     def _on_start_stop(self, event=None):
         """Handle start/stop button click."""

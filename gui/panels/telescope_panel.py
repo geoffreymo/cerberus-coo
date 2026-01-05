@@ -108,15 +108,32 @@ class TelescopePanel(ttk.LabelFrame):
     def _on_connect(self):
         """Handle connect button click."""
         if self.api.state.telescope_connected:
+            # Disconnect is fast, can do synchronously
             self.api.disconnect_telescope()
             self.connect_btn.config(text="Connect TCS")
             self.status_label.config(text="Disconnected", foreground="black")
         else:
-            if self.api.connect_telescope():
-                self.connect_btn.config(text="Disconnect")
-                self.status_label.config(text="Connected", foreground="green")
-            else:
-                self.status_label.config(text="Failed", foreground="red")
+            # Connection is slow, do in background thread
+            import threading
+            self.connect_btn.config(state=tk.DISABLED)
+            self.status_label.config(text="Connecting...", foreground="orange")
+
+            def connect_thread():
+                success = self.api.connect_telescope()
+                # Update GUI in main thread
+                self.after(0, lambda: self._on_connect_complete(success))
+
+            threading.Thread(target=connect_thread, daemon=True).start()
+
+    def _on_connect_complete(self, success):
+        """Called when telescope connection completes."""
+        self.connect_btn.config(state=tk.NORMAL)
+
+        if success:
+            self.connect_btn.config(text="Disconnect")
+            self.status_label.config(text="Connected", foreground="green")
+        else:
+            self.status_label.config(text="Failed", foreground="red")
 
     def _on_move_offset(self):
         """Handle move offset button click."""
