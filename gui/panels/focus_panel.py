@@ -184,14 +184,20 @@ class FocusPanel(ttk.LabelFrame):
                         exposure: float, filters: List[str]):
         """Run focus loop in background thread."""
         try:
+            import time
             from ...focusloop import FocusLoopConfig
+
+            # Create date-based directory structure matching regular captures
+            date_str = time.strftime('%Y_%m_%d')
+            output_dir = f"/data/cerberus/captures_{date_str}/focus"
 
             config = FocusLoopConfig(
                 start_position=start,
                 end_position=end,
                 step_size=step,
                 exposure_time=exposure,
-                filters=filters
+                filters=filters,
+                output_dir=output_dir
             )
 
             # Progress callback - MUST use after() for thread safety with Tkinter

@@ -214,9 +214,9 @@ class FocusLoop:
         # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if filter_name:
-            filename = f"focus_{position:.1f}_{filter_name}_{timestamp}.fits"
+            filename = f"{timestamp}_focus_{position:.1f}_{filter_name}.fits"
         else:
-            filename = f"focus_{position:.1f}_{timestamp}.fits"
+            filename = f"{timestamp}_focus_{position:.1f}.fits"
 
         filepath = os.path.join(self.config.output_dir, filename)
 
