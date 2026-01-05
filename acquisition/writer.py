@@ -120,8 +120,8 @@ class FITSWriter:
         # Telescope data callback for querying on first frame of each cube
         self._telescope_data_callback = None
 
-        # Per-cube telescope data (queried when first frame of cube arrives)
-        self._cube_telescope_data: Dict[int, tuple] = {}  # cube_index -> (position, status)
+        # Per-cube telescope and filter data (queried when first frame of cube arrives)
+        self._cube_telescope_data: Dict[int, tuple] = {}  # cube_index -> (position, status, filter)
 
     def configure(
         self,
@@ -164,14 +164,14 @@ class FITSWriter:
 
     def set_telescope_callback(self, callback):
         """
-        Set callback for querying telescope data on-demand.
+        Set callback for querying telescope and filter data on-demand.
 
-        The callback should return (position_dict, status_dict) when called.
+        The callback should return (position_dict, status_dict, filter_name) when called.
         This will be called when the first frame of each cube arrives,
-        ensuring telescope data matches the time of the first exposure.
+        ensuring telescope and filter data match the time of the first exposure.
 
         Args:
-            callback: Callable that returns (position_dict, status_dict)
+            callback: Callable that returns (position_dict, status_dict, filter_name)
         """
         self._telescope_data_callback = callback
 
@@ -312,16 +312,16 @@ class FITSWriter:
                                 self._timing_info['time_first_frame_arrived'] = time.time()
                                 logger.info(f"First frame arrived: camera time {timestamp:.6f}s")
 
-                            # Query telescope data on first frame of each NEW cube
+                            # Query telescope and filter data on first frame of each NEW cube
                             if self._buffer_index == 0 and self._telescope_data_callback:
                                 try:
                                     next_cube_idx = self._cube_index + 1
-                                    pos, status = self._telescope_data_callback()
-                                    self._cube_telescope_data[next_cube_idx] = (pos, status)
-                                    logger.debug(f"Queried telescope data for cube {next_cube_idx} at first frame")
+                                    pos, status, filter_name = self._telescope_data_callback()
+                                    self._cube_telescope_data[next_cube_idx] = (pos, status, filter_name)
+                                    logger.debug(f"Queried telescope/filter data for cube {next_cube_idx}: filter={filter_name}")
                                 except Exception as e:
-                                    logger.warning(f"Failed to query telescope data for cube: {e}")
-                                    self._cube_telescope_data[next_cube_idx] = (None, None)
+                                    logger.warning(f"Failed to query telescope/filter data for cube: {e}")
+                                    self._cube_telescope_data[next_cube_idx] = (None, None, None)
 
                             # Lazy buffer allocation
                             if self._frame_buffer is None:
@@ -403,16 +403,17 @@ class FITSWriter:
         with self._params_lock:
             camera_params = dict(self._camera_params)
 
-        # Get telescope data for THIS specific cube (queried at first frame)
+        # Get telescope and filter data for THIS specific cube (queried at first frame)
         # Fall back to global cached data if per-cube data not available
         if self._cube_index in self._cube_telescope_data:
-            telescope_position, telescope_status = self._cube_telescope_data[self._cube_index]
-            logger.debug(f"Using per-cube telescope data for cube {self._cube_index}")
+            telescope_position, telescope_status, filter_name = self._cube_telescope_data[self._cube_index]
+            logger.debug(f"Using per-cube telescope/filter data for cube {self._cube_index}: filter={filter_name}")
         else:
             # Fallback to global cached data (old behavior)
             with self._params_lock:
                 telescope_position = dict(self._telescope_position) if self._telescope_position else None
                 telescope_status = dict(self._telescope_status) if self._telescope_status else None
+            filter_name = None
             logger.debug(f"Using cached telescope data for cube {self._cube_index}")
 
         # Submit to thread pool
@@ -421,7 +422,7 @@ class FITSWriter:
             self._write_fits,
             filepath, frames, timestamps, framestamps,
             n_frames, self._cube_index, camera_params,
-            telescope_position, telescope_status, write_start
+            telescope_position, telescope_status, filter_name, write_start
         )
 
         # Track cube index for cleanup after write completes
@@ -442,6 +443,7 @@ class FITSWriter:
         camera_params: Dict[str, Any],
         telescope_position: Optional[Dict[str, Any]],
         telescope_status: Optional[Dict[str, Any]],
+        filter_name: Optional[str],
         write_start: float
     ) -> bool:
         """Write FITS file (runs in thread pool)."""
@@ -460,6 +462,12 @@ class FITSWriter:
 
             # Add telescope data to primary header
             self._add_telescope_headers(primary_hdu.header, telescope_position, telescope_status)
+
+            # Add filter to primary header
+            if filter_name:
+                primary_hdu.header['FILTER'] = (filter_name, 'Filter name')
+            else:
+                primary_hdu.header['FILTER'] = ('UNKNOWN', 'Filter name')
 
             # Create image HDU
             data_cube = frames[:n_frames] if len(frames) > n_frames else frames

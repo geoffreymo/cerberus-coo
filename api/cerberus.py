@@ -995,67 +995,71 @@ class CerberusAPI:
 
     def _get_telescope_data_for_cube(self):
         """
-        Query fresh telescope data for a cube (called at first frame).
+        Query fresh telescope and filter data for a cube (called at first frame).
 
         This is used as a callback by the writer to get telescope data
         at the exact moment the first frame of each cube arrives,
-        ensuring accurate telescope position/status for that cube.
+        ensuring accurate telescope position/status/filter for that cube.
 
         Returns:
-            tuple: (position_dict, status_dict) or (None, None) if unavailable
+            tuple: (position_dict, status_dict, filter_name) or (None, None, None) if unavailable
         """
-        if not self._state.telescope_connected:
-            return (None, None)
+        position_dict = None
+        status_dict = None
+        filter_name = None
 
-        try:
-            # Query telescope NOW (using persistent socket connection)
-            position = self.telescope.get_position()
-            status = self.telescope.get_status()
+        # Query telescope if connected
+        if self._state.telescope_connected:
+            try:
+                # Query telescope NOW (using persistent socket connection)
+                position = self.telescope.get_position()
+                status = self.telescope.get_status()
 
-            # Convert dataclasses to dicts
-            position_dict = None
-            status_dict = None
+                # Convert dataclasses to dicts
+                if position:
+                    position_dict = {
+                        'ra': position.ra,
+                        'dec': position.dec,
+                        'ha': position.ha,
+                        'lst': position.lst,
+                        'airmass': position.airmass,
+                        'utc_time': position.utc_time,
+                        'utc_day': position.utc_day,
+                    }
 
-            if position:
-                position_dict = {
-                    'ra': position.ra,
-                    'dec': position.dec,
-                    'ha': position.ha,
-                    'lst': position.lst,
-                    'airmass': position.airmass,
-                    'utc_time': position.utc_time,
-                    'utc_day': position.utc_day,
-                }
+                if status:
+                    status_dict = {
+                        'focus_mm': status.focus_mm,
+                        'tube_length_mm': status.tube_length_mm,
+                        'offset_ra_arcsec': status.offset_ra_arcsec,
+                        'offset_dec_arcsec': status.offset_dec_arcsec,
+                        'rate_ra_arcsec_hr': status.rate_ra_arcsec_hr,
+                        'rate_dec_arcsec_hr': status.rate_dec_arcsec_hr,
+                        'cass_ring_angle': status.cass_ring_angle,
+                        'telescope_id': status.telescope_id,
+                        'utc_time': status.utc_time,
+                        'utc_day': status.utc_day,
+                    }
 
-            if status:
-                status_dict = {
-                    'focus_mm': status.focus_mm,
-                    'tube_length_mm': status.tube_length_mm,
-                    'offset_ra_arcsec': status.offset_ra_arcsec,
-                    'offset_dec_arcsec': status.offset_dec_arcsec,
-                    'rate_ra_arcsec_hr': status.rate_ra_arcsec_hr,
-                    'rate_dec_arcsec_hr': status.rate_dec_arcsec_hr,
-                    'cass_ring_angle': status.cass_ring_angle,
-                    'telescope_id': status.telescope_id,
-                    'utc_time': status.utc_time,
-                    'utc_day': status.utc_day,
-                }
+            except Exception as e:
+                logger.warning(f"Could not query telescope data for cube: {e}")
 
-            return (position_dict, status_dict)
+        # Query current filter if filterwheel connected
+        if self._state.filterwheel_connected and self.filterwheel:
+            try:
+                filter_name = self.filterwheel.filter
+            except Exception as e:
+                logger.warning(f"Could not query filter for cube: {e}")
 
-        except Exception as e:
-            logger.warning(f"Could not query telescope data for cube: {e}")
-            return (None, None)
+        return (position_dict, status_dict, filter_name)
 
     def _update_writer_telescope_data(self):
         """Update the FITS writer with current telescope data (for fallback)."""
-        if not self._state.telescope_connected:
-            return
-
         try:
-            # Get current telescope data
-            position_dict, status_dict = self._get_telescope_data_for_cube()
+            # Get current telescope and filter data
+            position_dict, status_dict, filter_name = self._get_telescope_data_for_cube()
             self.writer.set_telescope_data(position_dict, status_dict)
+            # Note: filter is handled per-cube via callback, not via this fallback method
 
         except Exception as e:
             logger.warning(f"Could not update telescope data: {e}")
