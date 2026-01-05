@@ -14,9 +14,9 @@ from .panels import (
     ImageDisplayPanel,
     TelescopePanel,
     FilterPanel,
-    FocusPanel,
     StatusBar,
 )
+from .focus_window import FocusWindow
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,9 @@ class CerberusGUI:
 
         # Register status callback
         self.api.on_status_change(self._on_status_change)
+
+        # Focus window reference
+        self._focus_window = None
 
         # Start status update timer
         self._update_status()
@@ -154,9 +157,12 @@ class CerberusGUI:
         self.subarray_panel = SubarrayPanel(col2_frame, self.api)
         self.subarray_panel.pack(fill=tk.X, pady=(0, 5))
 
-        # Focus loop panel
-        self.focus_panel = FocusPanel(col2_frame, self.api)
-        self.focus_panel.pack(fill=tk.X, pady=(0, 5))
+        # Focus button
+        focus_btn_frame = ttk.Frame(col2_frame)
+        focus_btn_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(
+            focus_btn_frame, text="Open Focus Loop...", command=self._open_focus_window
+        ).pack(fill=tk.X, padx=5, pady=5)
 
         # Right column - Display
         right_frame = ttk.Frame(main_frame)
@@ -183,10 +189,25 @@ class CerberusGUI:
             self.subarray_panel.update_from_state(state)
             self.telescope_panel.update_from_state(state)
             self.filter_panel.update_from_state(state)
-            self.focus_panel.update_from_state(state)
             self.status_bar.update_from_state(state)
+
+            # Update focus window if it's open
+            if hasattr(self, '_focus_window') and self._focus_window and self._focus_window.winfo_exists():
+                self._focus_window.update_from_state(state)
         except Exception as e:
             logger.error(f"Error updating panels: {e}")
+
+    def _open_focus_window(self):
+        """Open the focus loop window."""
+        # If window already exists and is open, just raise it
+        if self._focus_window and self._focus_window.winfo_exists():
+            self._focus_window.lift()
+            self._focus_window.focus()
+            return
+
+        # Create new focus window
+        self._focus_window = FocusWindow(self.root, self.api)
+        self._focus_window.update_from_state(self.api.state)
 
     def _update_status(self):
         """Periodic status update."""

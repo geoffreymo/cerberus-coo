@@ -36,7 +36,8 @@ class FocusLoopConfig:
     step_size: float = 2.5
 
     # Camera settings
-    exposure_time: float = 5.0  # seconds
+    exposure_time: float = 5.0  # seconds (default/fallback)
+    filter_exposures: Dict[str, float] = field(default_factory=dict)  # Per-filter exposures
 
     # Output
     output_dir: str = "/tmp/cerberus_focus"
@@ -206,9 +207,10 @@ class FocusLoop:
         # Wait for settle
         time.sleep(self.config.settle_time)
 
-        # Capture
-        self.logger.info(f"Capturing {self.config.exposure_time}s exposure")
-        self.camera.set_exposure(self.config.exposure_time)
+        # Capture - use filter-specific exposure if available
+        exposure = self.config.filter_exposures.get(filter_name, self.config.exposure_time)
+        self.logger.info(f"Capturing {exposure}s exposure")
+        self.camera.set_exposure(exposure)
         frame = self.camera.capture_single()
 
         # Generate filename
@@ -290,7 +292,8 @@ class FocusLoop:
 
             # Optionally save plot
             try:
-                plot_name = f"focus_curve_{filter_name or 'all'}.png"
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                plot_name = f"{timestamp}_focus_curve_{filter_name or 'all'}.png"
                 plot_path = os.path.join(self.config.output_dir, plot_name)
                 self.analyzer.plot_focus_curve(result, output_path=plot_path)
             except Exception as e:
