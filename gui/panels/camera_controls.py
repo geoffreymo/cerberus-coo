@@ -22,6 +22,8 @@ class CameraControlsPanel(ttk.LabelFrame):
 
         # Variables - Basic
         self.exposure_var = tk.StringVar(value="100")
+        self.exposure_unit_var = tk.StringVar(value="ms")
+        self._last_unit = "ms"  # Track unit for conversions
 
         # Variables - Take N Images
         self.n_images_var = tk.StringVar(value="1")
@@ -66,12 +68,20 @@ class CameraControlsPanel(ttk.LabelFrame):
         exp_frame = ttk.Frame(self)
         exp_frame.pack(fill=tk.X, pady=2)
 
-        ttk.Label(exp_frame, text="Exposure (ms):").pack(side=tk.LEFT)
+        ttk.Label(exp_frame, text="Exposure:").pack(side=tk.LEFT)
         self.exposure_entry = ttk.Entry(
             exp_frame, textvariable=self.exposure_var, width=8
         )
         self.exposure_entry.pack(side=tk.LEFT, padx=5)
         self.exposure_entry.bind('<Return>', self._on_exposure_change)
+
+        # Unit selector
+        self.exposure_unit_combo = ttk.Combobox(
+            exp_frame, textvariable=self.exposure_unit_var,
+            width=5, state="readonly", values=["ms", "s", "min"]
+        )
+        self.exposure_unit_combo.pack(side=tk.LEFT, padx=2)
+        self.exposure_unit_combo.bind("<<ComboboxSelected>>", self._on_unit_change)
 
         ttk.Button(
             exp_frame, text="Set", command=self._on_exposure_change, width=5
@@ -191,7 +201,17 @@ class CameraControlsPanel(ttk.LabelFrame):
                 # Update exposure from camera
                 exp = self.api.get_exposure()
                 if exp:
-                    self.exposure_var.set(str(int(exp * 1000)))
+                    # Convert to current unit
+                    unit = self.exposure_unit_var.get()
+                    if unit == "ms":
+                        exp_display = exp * 1000.0
+                    elif unit == "s":
+                        exp_display = exp
+                    elif unit == "min":
+                        exp_display = exp / 60.0
+                    else:
+                        exp_display = exp * 1000.0
+                    self.exposure_var.set(str(exp_display))
 
     def _on_start(self, event=None):
         """Handle start button click."""
@@ -227,11 +247,60 @@ class CameraControlsPanel(ttk.LabelFrame):
     def _on_exposure_change(self, event=None):
         """Handle exposure change."""
         try:
-            exp_ms = float(self.exposure_var.get())
-            exp_sec = exp_ms / 1000.0
+            exp_value = float(self.exposure_var.get())
+            unit = self.exposure_unit_var.get()
+
+            # Convert to seconds based on unit
+            if unit == "ms":
+                exp_sec = exp_value / 1000.0
+            elif unit == "s":
+                exp_sec = exp_value
+            elif unit == "min":
+                exp_sec = exp_value * 60.0
+            else:
+                exp_sec = exp_value / 1000.0  # Default to ms
+
             self.api.set_exposure(exp_sec)
         except ValueError:
             pass
+
+    def _on_unit_change(self, event=None):
+        """Handle exposure unit change - convert displayed value."""
+        try:
+            # Get current value in current unit
+            current_value = float(self.exposure_var.get())
+            old_unit = self._last_unit if hasattr(self, '_last_unit') else "ms"
+            new_unit = self.exposure_unit_var.get()
+
+            # Convert to seconds first
+            if old_unit == "ms":
+                exp_sec = current_value / 1000.0
+            elif old_unit == "s":
+                exp_sec = current_value
+            elif old_unit == "min":
+                exp_sec = current_value * 60.0
+            else:
+                exp_sec = current_value / 1000.0
+
+            # Convert to new unit
+            if new_unit == "ms":
+                new_value = exp_sec * 1000.0
+            elif new_unit == "s":
+                new_value = exp_sec
+            elif new_unit == "min":
+                new_value = exp_sec / 60.0
+            else:
+                new_value = exp_sec * 1000.0
+
+            # Update display with full precision
+            self.exposure_var.set(str(new_value))
+            self._last_unit = new_unit
+
+        except ValueError:
+            pass
+
+        # Store current unit for next conversion
+        self._last_unit = self.exposure_unit_var.get()
 
     def _on_save_toggle(self):
         """Handle save checkbox toggle."""
@@ -390,10 +459,25 @@ class CameraControlsPanel(ttk.LabelFrame):
         # Exposure - only update if not focused on the entry
         try:
             if state.camera_exposure and self.root.focus_get() != self.exposure_entry:
+                # Convert from seconds to current unit
+                exp_sec = state.camera_exposure
+                unit = self.exposure_unit_var.get()
+
+                if unit == "ms":
+                    new_val = exp_sec * 1000.0
+                elif unit == "s":
+                    new_val = exp_sec
+                elif unit == "min":
+                    new_val = exp_sec / 60.0
+                else:
+                    new_val = exp_sec * 1000.0  # Default to ms
+
+                # Display with full precision
+                new_val_str = str(new_val)
+
                 current = self.exposure_var.get()
-                new_val = str(int(state.camera_exposure * 1000))
-                if current != new_val:
-                    self.exposure_var.set(new_val)
+                if current != new_val_str:
+                    self.exposure_var.set(new_val_str)
         except (tk.TclError, AttributeError):
             # Widget is being destroyed or window is closing
             pass
