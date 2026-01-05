@@ -21,12 +21,16 @@ class CameraControlsPanel(ttk.LabelFrame):
         self.api = api
 
         # Variables - Basic
+        self.target_var = tk.StringVar(value="Object")
+        self.comment_var = tk.StringVar(value="")
+        self.filter_var = tk.StringVar(value="")
         self.exposure_var = tk.StringVar(value="100")
         self.exposure_unit_var = tk.StringVar(value="ms")
         self._last_unit = "ms"  # Track unit for conversions
+        self.readout_var = tk.StringVar(value="Standard")
 
         # Variables - Take N Images
-        self.n_images_var = tk.StringVar(value="1")
+        self.n_images_var = tk.StringVar(value="")
         self.image_progress_var = tk.StringVar(value="")
         self._taking_images = False
         self._target_frames = 0
@@ -39,11 +43,11 @@ class CameraControlsPanel(ttk.LabelFrame):
 
         # Variables - Save
         self.save_var = tk.BooleanVar(value=False)
-        self.object_name_var = tk.StringVar(value="Object")
         self.output_dir_var = tk.StringVar(value="/data/cerberus")
         self.frames_per_cube_var = tk.StringVar(value="1000")
 
         # Stats
+        self.frames_captured_var = tk.StringVar(value="0")
         self.frames_saved_var = tk.StringVar(value="0")
         self.cubes_saved_var = tk.StringVar(value="0")
         self.frames_dropped_var = tk.StringVar(value="0")
@@ -64,90 +68,99 @@ class CameraControlsPanel(ttk.LabelFrame):
         self.status_label = ttk.Label(conn_frame, text="Disconnected")
         self.status_label.pack(side=tk.LEFT, padx=10)
 
-        # Exposure time
-        exp_frame = ttk.Frame(self)
-        exp_frame.pack(fill=tk.X, pady=2)
+        # Row 1: Target | Filter
+        row1_frame = ttk.Frame(self)
+        row1_frame.pack(fill=tk.X, pady=2)
 
-        ttk.Label(exp_frame, text="Exposure:").pack(side=tk.LEFT)
+        ttk.Label(row1_frame, text="Target:").pack(side=tk.LEFT)
+        ttk.Entry(
+            row1_frame, textvariable=self.target_var, width=15
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(row1_frame, text="Filter:").pack(side=tk.LEFT, padx=(10, 0))
+        self.filter_combo = ttk.Combobox(
+            row1_frame, textvariable=self.filter_var,
+            width=12, state="readonly"
+        )
+        self.filter_combo.pack(side=tk.LEFT, padx=5)
+        self.filter_combo.bind("<<ComboboxSelected>>", self._on_filter_change)
+
+        # Row 2: Comment
+        row2_frame = ttk.Frame(self)
+        row2_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row2_frame, text="Comment:").pack(side=tk.LEFT)
+        ttk.Entry(
+            row2_frame, textvariable=self.comment_var
+        ).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        # Separator
+        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # Row 3: Exposure | N Frames
+        row3_frame = ttk.Frame(self)
+        row3_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row3_frame, text="Exposure:").pack(side=tk.LEFT)
         self.exposure_entry = ttk.Entry(
-            exp_frame, textvariable=self.exposure_var, width=8
+            row3_frame, textvariable=self.exposure_var, width=8
         )
         self.exposure_entry.pack(side=tk.LEFT, padx=5)
         self.exposure_entry.bind('<Return>', self._on_exposure_change)
 
-        # Unit selector
         self.exposure_unit_combo = ttk.Combobox(
-            exp_frame, textvariable=self.exposure_unit_var,
+            row3_frame, textvariable=self.exposure_unit_var,
             width=5, state="readonly", values=["ms", "s", "min"]
         )
         self.exposure_unit_combo.pack(side=tk.LEFT, padx=2)
         self.exposure_unit_combo.bind("<<ComboboxSelected>>", self._on_unit_change)
 
-        ttk.Button(
-            exp_frame, text="Set", command=self._on_exposure_change, width=5
-        ).pack(side=tk.LEFT)
-
-        # Start/Stop buttons
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, pady=2)
-
-        self.start_btn = ttk.Button(
-            btn_frame, text="Start Streaming", command=self._on_start, state=tk.DISABLED
-        )
-        self.start_btn.pack(side=tk.LEFT, padx=2)
-
-        self.stop_btn = ttk.Button(
-            btn_frame, text="Stop Streaming", command=self._on_stop, state=tk.DISABLED
-        )
-        self.stop_btn.pack(side=tk.LEFT, padx=2)
-
-        # Streaming timer
-        self.stream_timer_label = ttk.Label(btn_frame, textvariable=self.stream_time_var)
-        self.stream_timer_label.pack(side=tk.LEFT, padx=10)
-
-        # Take N Images section
-        take_frame = ttk.Frame(self)
-        take_frame.pack(fill=tk.X, pady=2)
-
-        ttk.Label(take_frame, text="Take").pack(side=tk.LEFT)
+        ttk.Label(row3_frame, text="N Frames:").pack(side=tk.LEFT, padx=(10, 0))
         ttk.Entry(
-            take_frame, textvariable=self.n_images_var, width=5
+            row3_frame, textvariable=self.n_images_var, width=8
         ).pack(side=tk.LEFT, padx=5)
-        ttk.Label(take_frame, text="images:").pack(side=tk.LEFT)
 
-        self.take_btn = ttk.Button(
-            take_frame, text="Take Images", command=self._on_take_images, state=tk.DISABLED
+        # Row 4: Readout | Save checkbox | Start button
+        row4_frame = ttk.Frame(self)
+        row4_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row4_frame, text="Readout:").pack(side=tk.LEFT)
+        self.readout_combo = ttk.Combobox(
+            row4_frame, textvariable=self.readout_var,
+            width=12, state="readonly", values=["Ultra Quiet", "Standard"]
         )
-        self.take_btn.pack(side=tk.LEFT, padx=5)
+        self.readout_combo.pack(side=tk.LEFT, padx=5)
+        self.readout_combo.bind("<<ComboboxSelected>>", self._on_readout_change)
 
-        # Image progress
-        self.progress_label = ttk.Label(take_frame, textvariable=self.image_progress_var)
-        self.progress_label.pack(side=tk.LEFT, padx=5)
+        self.save_checkbox = ttk.Checkbutton(
+            row4_frame, text="Save", variable=self.save_var,
+            command=self._on_save_toggle
+        )
+        self.save_checkbox.pack(side=tk.LEFT, padx=10)
+
+        self.start_stop_btn = ttk.Button(
+            row4_frame, text="Start", command=self._on_start_stop, state=tk.DISABLED
+        )
+        self.start_stop_btn.pack(side=tk.LEFT, padx=5)
+
+        # Row 5: Streaming timer and frame counter
+        row5_frame = ttk.Frame(self)
+        row5_frame.pack(fill=tk.X, pady=2)
+
+        self.stream_timer_label = ttk.Label(row5_frame, textvariable=self.stream_time_var)
+        self.stream_timer_label.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(row5_frame, text="Frames:").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(row5_frame, textvariable=self.frames_captured_var).pack(side=tk.LEFT, padx=5)
 
         # Separator
         ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # Save checkbox
-        self.save_checkbox = ttk.Checkbutton(
-            self, text="Save Data to Disk", variable=self.save_var,
-            command=self._on_save_toggle
-        )
-        self.save_checkbox.pack(anchor=tk.W, pady=2)
-
-        # Object name
-        obj_frame = ttk.Frame(self)
-        obj_frame.pack(fill=tk.X, pady=2)
-
-        ttk.Label(obj_frame, text="Object:").pack(side=tk.LEFT)
-        ttk.Entry(
-            obj_frame, textvariable=self.object_name_var, width=15
-        ).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-
-        # Output directory
+        # Save Path
         dir_frame = ttk.Frame(self)
         dir_frame.pack(fill=tk.X, pady=2)
 
-        ttk.Label(dir_frame, text="Directory:").pack(side=tk.LEFT)
+        ttk.Label(dir_frame, text="Save Path:").pack(side=tk.LEFT)
         ttk.Entry(
             dir_frame, textvariable=self.output_dir_var, width=20
         ).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
@@ -155,14 +168,15 @@ class CameraControlsPanel(ttk.LabelFrame):
             dir_frame, text="...", command=self._browse_directory, width=3
         ).pack(side=tk.LEFT)
 
-        # Frames per cube
+        # Cube Size
         cube_frame = ttk.Frame(self)
         cube_frame.pack(fill=tk.X, pady=2)
 
-        ttk.Label(cube_frame, text="Frames/Cube:").pack(side=tk.LEFT)
+        ttk.Label(cube_frame, text="Cube Size:").pack(side=tk.LEFT)
         ttk.Entry(
             cube_frame, textvariable=self.frames_per_cube_var, width=8
         ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(cube_frame, text="frames").pack(side=tk.LEFT)
 
         # Stats row
         stats_frame = ttk.Frame(self)
@@ -192,12 +206,11 @@ class CameraControlsPanel(ttk.LabelFrame):
         if self.api.state.camera_connected:
             self.api.disconnect_camera()
             self.connect_btn.config(text="Connect")
-            self.start_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.DISABLED)
+            self.start_stop_btn.config(state=tk.DISABLED)
         else:
             if self.api.connect_camera():
                 self.connect_btn.config(text="Disconnect")
-                self.start_btn.config(state=tk.NORMAL)
+                self.start_stop_btn.config(state=tk.NORMAL)
                 # Update exposure from camera
                 exp = self.api.get_exposure()
                 if exp:
@@ -213,36 +226,48 @@ class CameraControlsPanel(ttk.LabelFrame):
                         exp_display = exp * 1000.0
                     self.exposure_var.set(str(exp_display))
 
-    def _on_start(self, event=None):
-        """Handle start button click."""
-        if self.api.start_streaming():
-            self.start_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
+    def _on_start_stop(self, event=None):
+        """Handle start/stop button click."""
+        if self.api.state.camera_streaming:
+            # Currently streaming - STOP
+            # Stop saving first if active
+            if self.api.state.is_saving:
+                self.api.stop_saving()
 
-            # Start streaming timer
-            self._start_stream_timer()
+            self.api.stop_streaming()
+            self.start_stop_btn.config(text="Start")
 
-            # Auto-start saving if checkbox is checked
-            if self.save_var.get():
-                self._start_saving()
+            # Stop streaming timer
+            self._stop_stream_timer()
 
-    def _on_stop(self, event=None):
-        """Handle stop button click."""
-        # Stop saving first if active
-        if self.api.state.is_saving:
-            self.api.stop_saving()
+            # Reset take images state if was running
+            if self._taking_images:
+                self._taking_images = False
+                self.image_progress_var.set("")
+        else:
+            # Currently stopped - START
+            # Check if N Frames is specified
+            try:
+                n_images = int(self.n_images_var.get()) if self.n_images_var.get() else 0
+            except ValueError:
+                n_images = 0
 
-        self.api.stop_streaming()
-        self.start_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.DISABLED)
+            if self.api.start_streaming():
+                self.start_stop_btn.config(text="Stop")
 
-        # Stop streaming timer
-        self._stop_stream_timer()
+                # Start streaming timer
+                self._start_stream_timer()
 
-        # Reset take images state if was running
-        if self._taking_images:
-            self._taking_images = False
-            self.image_progress_var.set("")
+                # Set up take images mode if N > 0
+                if n_images > 0:
+                    self._taking_images = True
+                    self._target_frames = n_images
+                    self._start_frame_count = self.api.state.camera_frames_captured
+                    self.image_progress_var.set(f"Taking: 0 / {n_images}")
+
+                # Auto-start saving if checkbox is checked
+                if self.save_var.get():
+                    self._start_saving()
 
     def _on_exposure_change(self, event=None):
         """Handle exposure change."""
@@ -302,6 +327,34 @@ class CameraControlsPanel(ttk.LabelFrame):
         # Store current unit for next conversion
         self._last_unit = self.exposure_unit_var.get()
 
+    def _on_filter_change(self, event=None):
+        """Handle filter selection change."""
+        if not self.api.state.filterwheel_connected:
+            return
+
+        selected = self.filter_var.get()
+        if selected:
+            try:
+                self.api.set_filter(selected)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to set filter: {e}")
+
+    def _on_readout_change(self, event=None):
+        """Handle readout mode change."""
+        if not self.api.state.camera_connected:
+            return
+
+        try:
+            value = self.readout_var.get()
+            # READOUT_SPEED: 1.0 = Ultra Quiet, 2.0 = Standard
+            speed_map = {"Ultra Quiet": 1.0, "Standard": 2.0}
+            if value in speed_map:
+                self.api.set_camera_property("READOUT_SPEED", speed_map[value])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set readout speed: {e}")
+
     def _on_save_toggle(self):
         """Handle save checkbox toggle."""
         if self.save_var.get():
@@ -325,10 +378,11 @@ class CameraControlsPanel(ttk.LabelFrame):
         except ValueError:
             frames_per_cube = 1000
 
-        object_name = self.object_name_var.get()
+        object_name = self.target_var.get()
         output_dir = self.output_dir_var.get()
+        comment = self.comment_var.get()
 
-        logger.info(f"_start_saving called: object={object_name}, dir={output_dir}, frames={frames_per_cube}")
+        logger.info(f"_start_saving called: object={object_name}, dir={output_dir}, frames={frames_per_cube}, comment={comment}")
         logger.info(f"Camera streaming: {self.api.state.camera_streaming}")
 
         # Check if output directory exists, create if not
@@ -346,7 +400,8 @@ class CameraControlsPanel(ttk.LabelFrame):
         success = self.api.start_saving(
             object_name=object_name,
             output_dir=output_dir,
-            frames_per_cube=frames_per_cube
+            frames_per_cube=frames_per_cube,
+            comment=comment
         )
 
         logger.info(f"start_saving returned: {success}")
@@ -389,30 +444,6 @@ class CameraControlsPanel(ttk.LabelFrame):
             # Schedule next update
             self._timer_after_id = self.after(1000, self._update_stream_timer)
 
-    def _on_take_images(self):
-        """Handle take N images button click."""
-        try:
-            n_images = int(self.n_images_var.get())
-            if n_images < 1:
-                return
-        except ValueError:
-            return
-
-        # Start streaming
-        if not self.api.state.camera_streaming:
-            if self.api.start_streaming():
-                self.start_btn.config(state=tk.DISABLED)
-                self.stop_btn.config(state=tk.NORMAL)
-                self._start_stream_timer()
-            else:
-                return
-
-        # Set up take images mode
-        self._taking_images = True
-        self._target_frames = n_images
-        self._start_frame_count = self.api.state.camera_frames_captured
-        self.image_progress_var.set(f"Taking: 0 / {n_images}")
-
     def _check_image_progress(self, current_frames):
         """Check if we've captured enough images."""
         if self._taking_images:
@@ -427,8 +458,7 @@ class CameraControlsPanel(ttk.LabelFrame):
                 # Auto-stop streaming
                 if self.api.state.camera_streaming:
                     self.api.stop_streaming()
-                    self.start_btn.config(state=tk.NORMAL)
-                    self.stop_btn.config(state=tk.DISABLED)
+                    self.start_stop_btn.config(text="Start")
                     self._stop_stream_timer()
 
     def update_from_state(self, state):
@@ -437,20 +467,31 @@ class CameraControlsPanel(ttk.LabelFrame):
         if state.camera_connected:
             self.connect_btn.config(text="Disconnect")
             self.status_label.config(text="Connected", foreground="green")
+            self.start_stop_btn.config(state=tk.NORMAL)
+
+            # Update button text based on streaming state
             if state.camera_streaming:
-                self.start_btn.config(state=tk.DISABLED)
-                self.stop_btn.config(state=tk.NORMAL)
-                self.take_btn.config(state=tk.DISABLED)  # Can't take while already streaming
+                self.start_stop_btn.config(text="Stop")
             else:
-                self.start_btn.config(state=tk.NORMAL)
-                self.stop_btn.config(state=tk.DISABLED)
-                self.take_btn.config(state=tk.NORMAL)  # Enable take images
+                self.start_stop_btn.config(text="Start")
         else:
             self.connect_btn.config(text="Connect")
             self.status_label.config(text="Disconnected", foreground="black")
-            self.start_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.DISABLED)
-            self.take_btn.config(state=tk.DISABLED)
+            self.start_stop_btn.config(state=tk.DISABLED)
+
+        # Update filter combo if filterwheel connected
+        if state.filterwheel_connected and state.available_filters:
+            if self.filter_combo['values'] != tuple(state.available_filters):
+                self.filter_combo['values'] = state.available_filters
+            # Update current filter selection
+            if state.current_filter and state.current_filter != self.filter_var.get():
+                self.filter_var.set(state.current_filter)
+        else:
+            self.filter_combo['values'] = []
+            self.filter_var.set("")
+
+        # Update frames captured display
+        self.frames_captured_var.set(str(state.camera_frames_captured))
 
         # Check image progress if taking images
         if self._taking_images and state.camera_streaming:

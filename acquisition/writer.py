@@ -128,7 +128,8 @@ class FITSWriter:
         output_dir: str,
         object_name: str,
         frames_per_cube: int = 1000,
-        timing_info: Optional[Dict[str, Any]] = None
+        timing_info: Optional[Dict[str, Any]] = None,
+        comment: str = ""
     ):
         """
         Configure the writer.
@@ -138,11 +139,13 @@ class FITSWriter:
             object_name: Object name for FITS headers and filenames
             frames_per_cube: Number of frames per FITS cube
             timing_info: Timing information for FITS headers
+            comment: Optional comment for FITS headers
         """
         self._output_dir = output_dir
         self._object_name = object_name
         self._frames_per_cube = frames_per_cube
         self._timing_info = timing_info or {}
+        self._comment = comment
 
     def set_camera_params(self, params: Dict[str, Any]):
         """Set camera parameters for FITS headers."""
@@ -468,6 +471,10 @@ class FITSWriter:
                 primary_hdu.header['FILTER'] = (filter_name, 'Filter name')
             else:
                 primary_hdu.header['FILTER'] = ('UNKNOWN', 'Filter name')
+
+            # Add comment to primary header
+            if self._comment:
+                primary_hdu.header['COMMENT'] = self._comment
 
             # Create image HDU
             data_cube = frames[:n_frames] if len(frames) > n_frames else frames

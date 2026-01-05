@@ -260,7 +260,8 @@ class CerberusAPI:
         self,
         object_name: str,
         output_dir: str,
-        frames_per_cube: int = 1000
+        frames_per_cube: int = 1000,
+        comment: str = ""
     ) -> bool:
         """
         Start saving frames to FITS cubes.
@@ -269,6 +270,7 @@ class CerberusAPI:
             object_name: Object name for filenames and headers
             output_dir: Output directory
             frames_per_cube: Number of frames per FITS cube
+            comment: Optional comment for FITS headers
 
         Returns:
             True if successful
@@ -292,7 +294,8 @@ class CerberusAPI:
             output_dir=output_dir,
             object_name=object_name,
             frames_per_cube=frames_per_cube,
-            timing_info=timing_info
+            timing_info=timing_info,
+            comment=comment
         )
         self.writer.set_camera_params(self.camera.get_all_params())
 
