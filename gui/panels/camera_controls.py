@@ -27,7 +27,7 @@ class CameraControlsPanel(ttk.LabelFrame):
         self.exposure_var = tk.StringVar(value="100")
         self.exposure_unit_var = tk.StringVar(value="ms")
         self._last_unit = "ms"  # Track unit for conversions
-        self.readout_var = tk.StringVar(value="Standard")
+        self.readout_var = tk.StringVar(value="Ultra Quiet")
 
         # Variables - Take N Images
         self.n_images_var = tk.StringVar(value="")
