@@ -15,13 +15,13 @@ os.environ['NUMEXPR_NUM_THREADS'] = '4'
 from ..api import CerberusAPI
 from .panels import (
     CameraControlsPanel,
-    CameraSettingsPanel,
     SubarrayPanel,
     ImageDisplayPanel,
-    TelescopePanel,
     StatusBar,
 )
 from .focus_window import FocusWindow
+from .camera_settings_window import CameraSettingsWindow
+from .telescope_settings_window import TelescopeSettingsWindow
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,12 @@ class CerberusGUI:
 
         # Focus window reference
         self._focus_window = None
+
+        # Camera settings window reference
+        self._camera_settings_window = None
+
+        # Telescope settings window reference
+        self._telescope_settings_window = None
 
         # Closing flag to prevent updates during shutdown
         self._closing = False
@@ -133,42 +139,35 @@ class CerberusGUI:
         main_frame = ttk.Frame(self.root, padding=5)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Left side - Controls in two columns
-        controls_frame = ttk.Frame(main_frame)
-        controls_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
-
-        # Left column 1 - Camera and Telescope
-        col1_frame = ttk.Frame(controls_frame)
-        col1_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+        # Left side - Controls
+        left_frame = ttk.Frame(main_frame)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
         # Camera controls (includes save and filter selection)
-        self.camera_panel = CameraControlsPanel(col1_frame, self.api)
+        self.camera_panel = CameraControlsPanel(left_frame, self.api)
         self.camera_panel.pack(fill=tk.X, pady=(0, 5))
 
-        # Telescope panel
-        self.telescope_panel = TelescopePanel(col1_frame, self.api)
-        self.telescope_panel.pack(fill=tk.X, pady=(0, 5))
-
-        # Left column 2 - Camera Settings, Subarray, Focus
-        col2_frame = ttk.Frame(controls_frame)
-        col2_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
-
-        # Camera settings
-        self.settings_panel = CameraSettingsPanel(col2_frame, self.api)
-        self.settings_panel.pack(fill=tk.X, pady=(0, 5))
-
         # Subarray controls
-        self.subarray_panel = SubarrayPanel(col2_frame, self.api)
+        self.subarray_panel = SubarrayPanel(left_frame, self.api)
         self.subarray_panel.pack(fill=tk.X, pady=(0, 5))
 
-        # Focus button
-        focus_btn_frame = ttk.Frame(col2_frame)
-        focus_btn_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(
-            focus_btn_frame, text="Open Focus", command=self._open_focus_window
-        ).pack(fill=tk.X, padx=5, pady=5)
+        # Settings buttons frame
+        buttons_frame = ttk.Frame(left_frame)
+        buttons_frame.pack(fill=tk.X, pady=(0, 5))
 
-        # Right column - Display
+        ttk.Button(
+            buttons_frame, text="Camera Settings", command=self._open_camera_settings_window
+        ).pack(fill=tk.X, padx=5, pady=2)
+
+        ttk.Button(
+            buttons_frame, text="Telescope Settings", command=self._open_telescope_settings_window
+        ).pack(fill=tk.X, padx=5, pady=2)
+
+        ttk.Button(
+            buttons_frame, text="Focus Settings", command=self._open_focus_window
+        ).pack(fill=tk.X, padx=5, pady=2)
+
+        # Right side - Display
         right_frame = ttk.Frame(main_frame)
         right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -193,14 +192,20 @@ class CerberusGUI:
 
         try:
             self.camera_panel.update_from_state(state)
-            self.settings_panel.update_from_state(state)
             self.subarray_panel.update_from_state(state)
-            self.telescope_panel.update_from_state(state)
             self.status_bar.update_from_state(state)
 
             # Update focus window if it's open
             if hasattr(self, '_focus_window') and self._focus_window and self._focus_window.winfo_exists():
                 self._focus_window.update_from_state(state)
+
+            # Update camera settings window if it's open
+            if hasattr(self, '_camera_settings_window') and self._camera_settings_window and self._camera_settings_window.winfo_exists():
+                self._camera_settings_window.update_from_state(state)
+
+            # Update telescope settings window if it's open
+            if hasattr(self, '_telescope_settings_window') and self._telescope_settings_window and self._telescope_settings_window.winfo_exists():
+                self._telescope_settings_window.update_from_state(state)
         except Exception as e:
             # Ignore 'popdown' errors when combobox dropdowns are open
             err_str = str(e).lower()
@@ -219,6 +224,30 @@ class CerberusGUI:
         # Create new focus window
         self._focus_window = FocusWindow(self.root, self.api)
         self._focus_window.update_from_state(self.api.state)
+
+    def _open_camera_settings_window(self):
+        """Open the camera settings window."""
+        # If window already exists and is open, just raise it
+        if self._camera_settings_window and self._camera_settings_window.winfo_exists():
+            self._camera_settings_window.lift()
+            self._camera_settings_window.focus()
+            return
+
+        # Create new camera settings window
+        self._camera_settings_window = CameraSettingsWindow(self.root, self.api)
+        self._camera_settings_window.update_from_state(self.api.state)
+
+    def _open_telescope_settings_window(self):
+        """Open the telescope settings window."""
+        # If window already exists and is open, just raise it
+        if self._telescope_settings_window and self._telescope_settings_window.winfo_exists():
+            self._telescope_settings_window.lift()
+            self._telescope_settings_window.focus()
+            return
+
+        # Create new telescope settings window
+        self._telescope_settings_window = TelescopeSettingsWindow(self.root, self.api)
+        self._telescope_settings_window.update_from_state(self.api.state)
 
     def _update_status(self):
         """Periodic status update."""

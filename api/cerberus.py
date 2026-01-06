@@ -197,7 +197,11 @@ class CerberusAPI:
         Returns:
             True if successful
         """
-        return self.camera.set_property(name, value)
+        result = self.camera.set_property(name, value)
+        if result:
+            # Trigger status update so GUI reflects the change
+            self.update_status()
+        return result
 
     def get_camera_params(self) -> Dict[str, Any]:
         """Get all camera parameters."""

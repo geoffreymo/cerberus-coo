@@ -216,11 +216,11 @@ class CameraController:
                 self._apply_defaults()
                 self._update_camera_params()
 
-                # Log all camera properties
-                logger.info("=== CAMERA PROPERTIES ===")
+                # Log all camera properties at debug level
+                logger.debug("=== CAMERA PROPERTIES ===")
                 with self._params_lock:
                     for prop_name in sorted(self._camera_params.keys()):
-                        logger.info(f"  {prop_name}: {self._camera_params[prop_name]}")
+                        logger.debug(f"  {prop_name}: {self._camera_params[prop_name]}")
 
                 self.is_connected = True
 
