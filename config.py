@@ -63,6 +63,7 @@ class InstrumentConfig:
     plate_scale_arcsec_per_pixel: float = 0.051
     saturation_level_adu: int = 60000
     min_fwhm_pixels: int = 5
+    fwhm_box_size_pixels: int = 80
     timestamp_rollover_threshold: int = 4000
     framestamp_rollover_threshold: int = 60000
 

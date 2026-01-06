@@ -78,6 +78,18 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._current_hpos = 0
         self._current_vpos = 0
 
+        # FWHM tracking state - load from config
+        from ...config import get_config
+        config = get_config()
+        self._fwhm_target: Optional[Tuple[int, int]] = None  # Image coordinates of tracked star
+        self._fwhm_box_size = config.instrument.fwhm_box_size_pixels  # Size of cutout for FWHM measurement
+        self._fwhm_value: Optional[float] = None  # Current FWHM in arcsec
+        self._fwhm_history: list = []  # [(timestamp, fwhm_arcsec), ...]
+        self._fwhm_history_max = 1000  # Max history entries
+        self._plate_scale = config.instrument.plate_scale_arcsec_per_pixel
+        self._fwhm_animation = None  # Matplotlib animation (kept alive to prevent GC)
+        self._fwhm_plot_fig = None   # Matplotlib figure reference
+
         self._create_widgets()
 
     def _create_widgets(self):
@@ -97,6 +109,31 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         ttk.Label(info_frame, text="Cursor:").pack(side=tk.LEFT, padx=(10, 0))
         ttk.Label(info_frame, textvariable=self.cursor_var, width=8).pack(side=tk.LEFT)
+
+        # FWHM display row
+        fwhm_frame = ttk.Frame(self)
+        fwhm_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(fwhm_frame, text="FWHM:").pack(side=tk.LEFT)
+        self.fwhm_var = tk.StringVar(value="--")
+        ttk.Label(fwhm_frame, textvariable=self.fwhm_var, width=12).pack(side=tk.LEFT)
+
+        self.clear_fwhm_btn = ttk.Button(
+            fwhm_frame, text="Clear", command=self._clear_fwhm_target,
+            width=6
+        )
+        self.clear_fwhm_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        self.plot_fwhm_btn = ttk.Button(
+            fwhm_frame, text="Plot", command=self._show_fwhm_plot,
+            width=6
+        )
+        self.plot_fwhm_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(
+            fwhm_frame, text="(Right-click on star)",
+            font=("TkDefaultFont", 9), foreground="gray"
+        ).pack(side=tk.LEFT, padx=(10, 0))
 
         # Scale controls
         scale_frame = ttk.Frame(self)
@@ -227,9 +264,12 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 self._finish_roi_selection()
 
         elif event == cv2.EVENT_RBUTTONDOWN:
-            # Right-click to cancel ROI or show menu
+            # Right-click to cancel ROI or set FWHM target
             if self._roi_drag_active:
                 self._cancel_roi_selection()
+            else:
+                # Set FWHM tracking target at this position
+                self._set_fwhm_target(img_x, img_y)
 
     def _display_to_image_coords(self, display_x: int, display_y: int) -> Tuple[int, int]:
         """Convert display window coordinates to image coordinates."""
@@ -306,6 +346,265 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._current_hpos = hpos
         self._current_vpos = vpos
 
+    def _set_fwhm_target(self, img_x: int, img_y: int):
+        """Set FWHM tracking target at given image coordinates."""
+        if self._last_frame is None:
+            return
+
+        height, width = self._last_frame.shape[:2]
+        half_box = self._fwhm_box_size // 2
+
+        # Check bounds - need enough room for cutout
+        if img_x < half_box or img_x >= width - half_box:
+            logger.warning(f"FWHM target too close to horizontal edge")
+            return
+        if img_y < half_box or img_y >= height - half_box:
+            logger.warning(f"FWHM target too close to vertical edge")
+            return
+
+        self._fwhm_target = (img_x, img_y)
+        self._fwhm_history = []  # Clear history on new target
+        logger.info(f"FWHM tracking target set at ({img_x}, {img_y})")
+
+    def _clear_fwhm_target(self):
+        """Clear FWHM tracking target."""
+        self._fwhm_target = None
+        self._fwhm_value = None
+        self._fwhm_history = []
+        self.fwhm_var.set("--")
+        logger.info("FWHM tracking cleared")
+
+    def _measure_fwhm_gaussian(self, frame: np.ndarray) -> Optional[float]:
+        """
+        Measure FWHM using 2D Gaussian fit.
+
+        Returns FWHM in pixels, or None if fit fails.
+        """
+        if self._fwhm_target is None or frame is None:
+            return None
+
+        try:
+            from scipy.optimize import curve_fit
+            from scipy.ndimage import center_of_mass
+        except ImportError:
+            logger.warning("scipy not available for Gaussian fitting")
+            return None
+
+        cx, cy = self._fwhm_target
+        half_box = self._fwhm_box_size // 2
+
+        # Extract cutout
+        y1, y2 = cy - half_box, cy + half_box
+        x1, x2 = cx - half_box, cx + half_box
+
+        # Bounds check
+        height, width = frame.shape[:2]
+        if y1 < 0 or y2 > height or x1 < 0 or x2 > width:
+            return None
+
+        cutout = frame[y1:y2, x1:x2].astype(np.float64)
+
+        # Subtract background (median of edge pixels)
+        edge_pixels = np.concatenate([
+            cutout[0, :], cutout[-1, :],
+            cutout[1:-1, 0], cutout[1:-1, -1]
+        ])
+        background = np.median(edge_pixels)
+        cutout = cutout - background
+
+        # Find initial center using center of mass
+        try:
+            com_y, com_x = center_of_mass(np.maximum(cutout, 0))
+            if np.isnan(com_x) or np.isnan(com_y):
+                com_x, com_y = half_box, half_box
+        except:
+            com_x, com_y = half_box, half_box
+
+        # Create coordinate grids
+        y_grid, x_grid = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
+
+        # 2D Gaussian function
+        def gaussian_2d(coords, amplitude, x0, y0, sigma_x, sigma_y, offset):
+            x, y = coords
+            return (offset + amplitude * np.exp(
+                -((x - x0)**2 / (2 * sigma_x**2) + (y - y0)**2 / (2 * sigma_y**2))
+            )).ravel()
+
+        # Initial parameter guesses
+        amplitude_guess = np.max(cutout) - np.min(cutout)
+        sigma_guess = 5.0  # ~10 pixel FWHM initial guess
+
+        p0 = [amplitude_guess, com_x, com_y, sigma_guess, sigma_guess, 0]
+
+        # Bounds for parameters
+        bounds = (
+            [0, 0, 0, 1, 1, -np.inf],  # lower bounds
+            [np.inf, cutout.shape[1], cutout.shape[0], half_box, half_box, np.inf]  # upper
+        )
+
+        try:
+            popt, _ = curve_fit(
+                gaussian_2d,
+                (x_grid, y_grid),
+                cutout.ravel(),
+                p0=p0,
+                bounds=bounds,
+                maxfev=1000
+            )
+
+            amplitude, x0, y0, sigma_x, sigma_y = popt[:5]
+
+            # FWHM = 2 * sqrt(2 * ln(2)) * sigma ≈ 2.355 * sigma
+            fwhm_x = 2.355 * sigma_x
+            fwhm_y = 2.355 * sigma_y
+
+            # Use geometric mean of x and y FWHM
+            fwhm_pixels = np.sqrt(fwhm_x * fwhm_y)
+
+            # Sanity checks
+            if fwhm_pixels < 1 or fwhm_pixels > self._fwhm_box_size:
+                return None
+
+            return float(fwhm_pixels)
+
+        except Exception as e:
+            logger.debug(f"Gaussian fit failed: {e}")
+            return None
+
+    def _update_fwhm(self, frame: np.ndarray):
+        """Update FWHM measurement and history."""
+        if self._fwhm_target is None:
+            return
+
+        fwhm_pixels = self._measure_fwhm_gaussian(frame)
+
+        if fwhm_pixels is not None:
+            fwhm_arcsec = fwhm_pixels * self._plate_scale
+            self._fwhm_value = fwhm_arcsec
+
+            # Update history
+            timestamp = time.time()
+            self._fwhm_history.append((timestamp, fwhm_arcsec))
+
+            # Trim history if too long
+            if len(self._fwhm_history) > self._fwhm_history_max:
+                self._fwhm_history = self._fwhm_history[-self._fwhm_history_max:]
+
+            # Update display
+            self.fwhm_var.set(f"{fwhm_arcsec:.3f}\"")
+        else:
+            self.fwhm_var.set("fit err")
+
+    def _show_fwhm_plot(self):
+        """Show FWHM history plot in a separate window."""
+        if not self._fwhm_history:
+            logger.info("No FWHM history to plot")
+            return
+
+        try:
+            import matplotlib
+            matplotlib.use('TkAgg')  # Use Tk backend for GUI window
+            import matplotlib.pyplot as plt
+            from matplotlib.animation import FuncAnimation
+        except ImportError:
+            logger.warning("matplotlib not available for FWHM plotting")
+            return
+
+        # Create figure
+        fig, ax = plt.subplots(figsize=(8, 4))
+        fig.canvas.manager.set_window_title("FWHM History")
+
+        # Extract data
+        timestamps = [t for t, _ in self._fwhm_history]
+        fwhms = [f for _, f in self._fwhm_history]
+
+        # Convert to relative time (seconds from start)
+        t0 = timestamps[0]
+        rel_times = [t - t0 for t in timestamps]
+
+        # Plot
+        line, = ax.plot(rel_times, fwhms, 'b-', linewidth=1, marker='o', markersize=2)
+        ax.set_xlabel("Time (seconds)", fontsize=10)
+        ax.set_ylabel("FWHM (arcsec)", fontsize=10)
+        ax.set_title("Live FWHM Tracking", fontsize=12)
+        ax.grid(True, alpha=0.3)
+
+        # Add statistics text
+        if fwhms:
+            mean_fwhm = np.mean(fwhms)
+            std_fwhm = np.std(fwhms)
+            min_fwhm = np.min(fwhms)
+            max_fwhm = np.max(fwhms)
+            stats_text = f"Mean: {mean_fwhm:.3f}\"  Std: {std_fwhm:.3f}\"  Min: {min_fwhm:.3f}\"  Max: {max_fwhm:.3f}\""
+            ax.set_title(f"Live FWHM Tracking\n{stats_text}", fontsize=10)
+
+        # Animation update function for live updates
+        def update(frame):
+            if not self._fwhm_history:
+                return line,
+
+            timestamps = [t for t, _ in self._fwhm_history]
+            fwhms = [f for _, f in self._fwhm_history]
+            t0 = timestamps[0]
+            rel_times = [t - t0 for t in timestamps]
+
+            line.set_data(rel_times, fwhms)
+            ax.relim()
+            ax.autoscale_view()
+
+            # Update stats
+            if fwhms:
+                mean_fwhm = np.mean(fwhms)
+                std_fwhm = np.std(fwhms)
+                min_fwhm = np.min(fwhms)
+                max_fwhm = np.max(fwhms)
+                stats_text = f"Mean: {mean_fwhm:.3f}\"  Std: {std_fwhm:.3f}\"  Min: {min_fwhm:.3f}\"  Max: {max_fwhm:.3f}\""
+                ax.set_title(f"Live FWHM Tracking\n{stats_text}", fontsize=10)
+
+            return line,
+
+        # Create animation that updates every 500ms
+        # Store as instance variable to prevent garbage collection
+        self._fwhm_animation = FuncAnimation(fig, update, interval=500, blit=False, cache_frame_data=False)
+        self._fwhm_plot_fig = fig
+
+        plt.tight_layout()
+        plt.show(block=False)
+
+        logger.info(f"FWHM plot opened with {len(self._fwhm_history)} data points")
+
+    def _draw_fwhm_overlay(self, display_frame: np.ndarray) -> np.ndarray:
+        """Draw FWHM tracking target overlay on display frame."""
+        if self._fwhm_target is None:
+            return display_frame
+
+        # Convert to BGR for colored overlay if needed
+        if len(display_frame.shape) == 2:
+            display_frame = cv2.cvtColor(display_frame, cv2.COLOR_GRAY2BGR)
+
+        # Convert image coordinates to display coordinates
+        scale = self._display_scale_factor
+        cx = int(self._fwhm_target[0] * scale)
+        cy = int(self._fwhm_target[1] * scale)
+        radius = int(self._fwhm_box_size * scale / 2)
+
+        # Draw circle (cyan)
+        cv2.circle(display_frame, (cx, cy), radius, (255, 255, 0), 2)
+
+        # Draw crosshair
+        cv2.line(display_frame, (cx - 5, cy), (cx + 5, cy), (255, 255, 0), 1)
+        cv2.line(display_frame, (cx, cy - 5), (cx, cy + 5), (255, 255, 0), 1)
+
+        # Draw FWHM value if available
+        if self._fwhm_value is not None:
+            text = f"{self._fwhm_value:.3f}\""
+            text_x = cx + radius + 5
+            text_y = cy - 5
+            cv2.putText(display_frame, text, (text_x, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
+        return display_frame
+
     def _display_loop(self):
         """Display loop (runs in MAIN THREAD via self.after to avoid Qt deadlocks)."""
         if not self._running:
@@ -364,8 +663,15 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 else:
                     self._display_scale_factor = 1.0
 
+                # Update FWHM measurement (throttled - every 5th frame)
+                if self._fwhm_target is not None and self._frame_count % 5 == 0:
+                    self._update_fwhm(frame)
+
                 # Draw ROI rectangle if selecting
                 display_frame = self._draw_roi_overlay(display_frame)
+
+                # Draw FWHM tracking overlay
+                display_frame = self._draw_fwhm_overlay(display_frame)
 
                 # Show frame (running in main thread - no deadlock!)
                 cv2.imshow(self._window_name, display_frame)

@@ -66,6 +66,7 @@
         "plate_scale_arcsec_per_pixel": 0.051,
         "saturation_level_adu": 60000,
         "min_fwhm_pixels": 5,
+        "fwhm_box_size_pixels": 80,
         "timestamp_rollover_threshold": 4000,
         "framestamp_rollover_threshold": 60000
     },
