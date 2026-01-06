@@ -40,6 +40,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._last_frame: Optional[np.ndarray] = None
         self._window_created = False
         self._display_lock = threading.Lock()  # Prevent display update pileup
+        self._after_id = None  # Track scheduled after callback for cleanup
 
         # Scaling - defaults for typical dark/bias frames
         self.scale_min_var = tk.StringVar(value="200")
@@ -90,6 +91,20 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._fwhm_animation = None  # Matplotlib animation (kept alive to prevent GC)
         self._fwhm_plot_fig = None   # Matplotlib figure reference
 
+        # Photometry state (aperture photometry for lightcurves)
+        self._photometry_enabled = False
+        self._target_aperture: Optional[Tuple[int, int]] = None  # (x, y) image coords
+        self._comparison_aperture: Optional[Tuple[int, int]] = None  # (x, y) image coords
+        self._aperture_radius = tk.IntVar(value=10)  # Aperture radius in pixels
+        self._annulus_inner = tk.IntVar(value=15)    # Inner annulus radius
+        self._annulus_outer = tk.IntVar(value=25)    # Outer annulus radius
+        self._photometry_data: list = []  # [{time, target_flux, comp_flux, relative_flux}, ...]
+        self._photometry_data_max = 10000  # Max data points to keep
+        self._lightcurve_window = None
+        self._lightcurve_animation = None
+        self._lightcurve_fig = None
+        self._last_photometry_time = 0  # Rate limiting
+
         self._create_widgets()
 
     def _create_widgets(self):
@@ -132,6 +147,57 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         ttk.Label(
             fwhm_frame, text="(Right-click on star)",
+            font=("TkDefaultFont", 9), foreground="gray"
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        # Photometry controls
+        phot_frame = ttk.LabelFrame(self, text="Photometry", padding=3)
+        phot_frame.pack(fill=tk.X, pady=2)
+
+        # Row 1: Enable checkbox and status
+        phot_row1 = ttk.Frame(phot_frame)
+        phot_row1.pack(fill=tk.X)
+
+        self._phot_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            phot_row1, text="Enable", variable=self._phot_enabled_var,
+            command=self._toggle_photometry
+        ).pack(side=tk.LEFT)
+
+        self._target_status_var = tk.StringVar(value="T: --")
+        ttk.Label(phot_row1, textvariable=self._target_status_var, width=12).pack(side=tk.LEFT, padx=(10, 0))
+
+        self._comp_status_var = tk.StringVar(value="C: --")
+        ttk.Label(phot_row1, textvariable=self._comp_status_var, width=12).pack(side=tk.LEFT)
+
+        ttk.Button(
+            phot_row1, text="Clear", command=self._clear_apertures, width=6
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Button(
+            phot_row1, text="Plot", command=self._show_lightcurve, width=6
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
+        # Row 2: Aperture settings
+        phot_row2 = ttk.Frame(phot_frame)
+        phot_row2.pack(fill=tk.X, pady=(2, 0))
+
+        ttk.Label(phot_row2, text="Ap R:").pack(side=tk.LEFT)
+        ttk.Spinbox(
+            phot_row2, from_=3, to=50, width=4, textvariable=self._aperture_radius
+        ).pack(side=tk.LEFT, padx=(2, 10))
+
+        ttk.Label(phot_row2, text="Annulus:").pack(side=tk.LEFT)
+        ttk.Spinbox(
+            phot_row2, from_=5, to=100, width=4, textvariable=self._annulus_inner
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Label(phot_row2, text="-").pack(side=tk.LEFT)
+        ttk.Spinbox(
+            phot_row2, from_=10, to=150, width=4, textvariable=self._annulus_outer
+        ).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(
+            phot_row2, text="(CTRL+click: target, ALT+click: comp)",
             font=("TkDefaultFont", 9), foreground="gray"
         ).pack(side=tk.LEFT, padx=(10, 0))
 
@@ -178,7 +244,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self.display_btn.config(text="Close Display")
 
         # Start display loop in main thread (avoids Qt deadlock)
-        self.after(20, self._display_loop)
+        self._after_id = self.after(20, self._display_loop)
 
     def open_display_next_to_window(self):
         """Open display and position it next to the main window."""
@@ -249,8 +315,18 @@ class ImageDisplayPanel(ttk.LabelFrame):
                     self._roi_end_point = (img_x, img_y)
 
         elif event == cv2.EVENT_LBUTTONDOWN:
-            # Start ROI selection if SHIFT is held
-            if shift_held:
+            # Check modifier keys
+            ctrl_held = (flags & cv2.EVENT_FLAG_CTRLKEY) != 0
+            alt_held = (flags & cv2.EVENT_FLAG_ALTKEY) != 0
+
+            if ctrl_held and self._photometry_enabled:
+                # CTRL+click sets target aperture
+                self._set_target_aperture(img_x, img_y)
+            elif alt_held and self._photometry_enabled:
+                # ALT+click sets comparison aperture
+                self._set_comparison_aperture(img_x, img_y)
+            elif shift_held:
+                # Start ROI selection if SHIFT is held
                 self._roi_start_point = (img_x, img_y)
                 self._roi_end_point = (img_x, img_y)
                 self._roi_drag_active = True
@@ -588,20 +664,24 @@ class ImageDisplayPanel(ttk.LabelFrame):
         cy = int(self._fwhm_target[1] * scale)
         radius = int(self._fwhm_box_size * scale / 2)
 
-        # Draw circle (cyan)
-        cv2.circle(display_frame, (cx, cy), radius, (255, 255, 0), 2)
+        # Draw circle (magenta for FWHM to distinguish from photometry)
+        cv2.circle(display_frame, (cx, cy), radius, (255, 0, 255), 2)
 
-        # Draw crosshair
-        cv2.line(display_frame, (cx - 5, cy), (cx + 5, cy), (255, 255, 0), 1)
-        cv2.line(display_frame, (cx, cy - 5), (cx, cy + 5), (255, 255, 0), 1)
+        # Draw crosshair (thicker)
+        cv2.line(display_frame, (cx - 10, cy), (cx + 10, cy), (255, 0, 255), 2)
+        cv2.line(display_frame, (cx, cy - 10), (cx, cy + 10), (255, 0, 255), 2)
+
+        # Draw "F" label
+        cv2.putText(display_frame, "F", (cx + radius + 10, cy + 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 255), 3)
 
         # Draw FWHM value if available
         if self._fwhm_value is not None:
             text = f"{self._fwhm_value:.3f}\""
-            text_x = cx + radius + 5
-            text_y = cy - 5
+            text_x = cx + radius + 10
+            text_y = cy + 50
             cv2.putText(display_frame, text, (text_x, text_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 255), 2)
 
         return display_frame
 
@@ -615,7 +695,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
         if not self._display_lock.acquire(blocking=False):
             # Schedule next update and return immediately
             if self._running:
-                self.after(50, self._display_loop)  # Longer delay if skipping
+                self._after_id = self.after(50, self._display_loop)  # Longer delay if skipping
             return
 
         try:
@@ -667,11 +747,17 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 if self._fwhm_target is not None and self._frame_count % 5 == 0:
                     self._update_fwhm(frame)
 
+                # Update photometry measurement
+                self._update_photometry(frame)
+
                 # Draw ROI rectangle if selecting
                 display_frame = self._draw_roi_overlay(display_frame)
 
                 # Draw FWHM tracking overlay
                 display_frame = self._draw_fwhm_overlay(display_frame)
+
+                # Draw aperture overlays for photometry
+                display_frame = self._draw_aperture_overlay(display_frame)
 
                 # Show frame (running in main thread - no deadlock!)
                 cv2.imshow(self._window_name, display_frame)
@@ -692,7 +778,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         # Schedule next update (~50 Hz like v18 GUI)
         if self._running:
-            self.after(50, self._display_loop)
+            self._after_id = self.after(50, self._display_loop)
 
     def _scale_frame(self, frame: np.ndarray) -> np.ndarray:
         """Scale frame for display."""
@@ -752,7 +838,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
     def _update_cursor_value(self, frame: np.ndarray):
         """Update cursor value from mouse position over display window."""
         try:
-            if frame is None or self._mouse_x is None or self._mouse_y is None:
+            if not self._running or frame is None or self._mouse_x is None or self._mouse_y is None:
                 return
 
             height, width = frame.shape[:2]
@@ -760,10 +846,10 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
             if 0 <= x < width and 0 <= y < height:
                 pixel_value = frame[y, x]
-                # Update Tkinter var from main thread
-                self.after(0, lambda v=pixel_value: self.cursor_var.set(str(v)))
+                # Update Tkinter var directly (we're already in main thread from display_loop)
+                self.cursor_var.set(str(pixel_value))
             else:
-                self.after(0, lambda: self.cursor_var.set("--"))
+                self.cursor_var.set("--")
         except Exception:
             pass
 
@@ -795,6 +881,31 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
     def cleanup(self):
         """Cleanup resources."""
+        # Stop the display loop first
+        self._running = False
+
+        # Cancel any pending after callbacks to prevent "invalid command" errors
+        if self._after_id is not None:
+            try:
+                self.after_cancel(self._after_id)
+                self._after_id = None
+            except:
+                pass
+
+        # Close matplotlib figures to prevent orphaned windows
+        try:
+            import matplotlib.pyplot as plt
+            if self._fwhm_plot_fig is not None:
+                plt.close(self._fwhm_plot_fig)
+                self._fwhm_plot_fig = None
+                self._fwhm_animation = None
+            if self._lightcurve_fig is not None:
+                plt.close(self._lightcurve_fig)
+                self._lightcurve_fig = None
+                self._lightcurve_animation = None
+        except:
+            pass
+
         self._stop_display()
         # Clean up all OpenCV windows to avoid Qt warnings
         if CV2_AVAILABLE:
@@ -803,3 +914,247 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 cv2.waitKey(1)  # Process any pending events
             except:
                 pass
+
+    # ========== Photometry Methods ==========
+
+    def _toggle_photometry(self):
+        """Toggle photometry mode."""
+        self._photometry_enabled = self._phot_enabled_var.get()
+        if self._photometry_enabled:
+            logger.info("Photometry enabled - CTRL+click for target, ALT+click for comparison")
+        else:
+            logger.info("Photometry disabled")
+
+    def _set_target_aperture(self, x: int, y: int):
+        """Set target aperture position."""
+        self._target_aperture = (x, y)
+        self._target_status_var.set(f"T: ({x},{y})")
+        self._photometry_data = []  # Clear data on new target
+        logger.info(f"Target aperture set at ({x}, {y})")
+
+    def _set_comparison_aperture(self, x: int, y: int):
+        """Set comparison aperture position."""
+        self._comparison_aperture = (x, y)
+        self._comp_status_var.set(f"C: ({x},{y})")
+        self._photometry_data = []  # Clear data on new comparison
+        logger.info(f"Comparison aperture set at ({x}, {y})")
+
+    def _clear_apertures(self):
+        """Clear all aperture positions."""
+        self._target_aperture = None
+        self._comparison_aperture = None
+        self._target_status_var.set("T: --")
+        self._comp_status_var.set("C: --")
+        self._photometry_data = []
+        logger.info("Apertures cleared")
+
+    def _compute_flux(self, frame: np.ndarray, cx: int, cy: int) -> Optional[float]:
+        """
+        Compute background-subtracted aperture flux.
+
+        Args:
+            frame: Image data
+            cx, cy: Center coordinates
+
+        Returns:
+            Background-subtracted flux, or None if out of bounds
+        """
+        r_ap = self._aperture_radius.get()
+        r_in = self._annulus_inner.get()
+        r_out = self._annulus_outer.get()
+
+        height, width = frame.shape[:2]
+
+        # Check bounds
+        if (cx - r_out < 0 or cx + r_out >= width or
+            cy - r_out < 0 or cy + r_out >= height):
+            return None
+
+        # Extract subregion for efficiency
+        x0 = max(0, cx - r_out - 1)
+        x1 = min(width, cx + r_out + 2)
+        y0 = max(0, cy - r_out - 1)
+        y1 = min(height, cy + r_out + 2)
+
+        subdata = frame[y0:y1, x0:x1]
+        sub_cx = cx - x0
+        sub_cy = cy - y0
+
+        # Create coordinate grids for subregion
+        y_grid, x_grid = np.ogrid[:subdata.shape[0], :subdata.shape[1]]
+        dist_sq = (x_grid - sub_cx)**2 + (y_grid - sub_cy)**2
+
+        # Aperture and annulus masks
+        aperture_mask = dist_sq <= r_ap**2
+        annulus_mask = (dist_sq >= r_in**2) & (dist_sq <= r_out**2)
+
+        # Background from annulus
+        annulus_pixels = subdata[annulus_mask]
+        if len(annulus_pixels) == 0:
+            return None
+        background = np.median(annulus_pixels)
+
+        # Source flux
+        aperture_pixels = subdata[aperture_mask]
+        n_pixels = len(aperture_pixels)
+        flux = np.sum(aperture_pixels.astype(np.float64)) - (background * n_pixels)
+
+        return float(flux)
+
+    def _update_photometry(self, frame: np.ndarray):
+        """Update photometry measurements."""
+        if not self._photometry_enabled or self._target_aperture is None:
+            return
+
+        # Rate limit to ~20 Hz
+        current_time = time.time()
+        if current_time - self._last_photometry_time < 0.05:
+            return
+        self._last_photometry_time = current_time
+
+        # Compute target flux
+        target_flux = self._compute_flux(frame, self._target_aperture[0], self._target_aperture[1])
+
+        # Compute comparison flux if set
+        if self._comparison_aperture is not None:
+            comp_flux = self._compute_flux(frame, self._comparison_aperture[0], self._comparison_aperture[1])
+        else:
+            comp_flux = None
+
+        # Calculate relative flux
+        if target_flux is not None and comp_flux is not None and comp_flux > 0:
+            relative_flux = target_flux / comp_flux
+        else:
+            relative_flux = None
+
+        # Store data point
+        data_point = {
+            'time': current_time,
+            'target_flux': target_flux,
+            'comp_flux': comp_flux,
+            'relative_flux': relative_flux
+        }
+        self._photometry_data.append(data_point)
+
+        # Trim buffer if needed
+        if len(self._photometry_data) > self._photometry_data_max:
+            self._photometry_data = self._photometry_data[-self._photometry_data_max:]
+
+    def _draw_aperture_overlay(self, display_frame: np.ndarray) -> np.ndarray:
+        """Draw aperture circles on display frame."""
+        if not self._photometry_enabled:
+            return display_frame
+
+        if self._target_aperture is None and self._comparison_aperture is None:
+            return display_frame
+
+        # Convert to BGR for colored overlay if needed
+        if len(display_frame.shape) == 2:
+            display_frame = cv2.cvtColor(display_frame, cv2.COLOR_GRAY2BGR)
+
+        scale = self._display_scale_factor
+        r_ap = int(self._aperture_radius.get() * scale)
+        r_in = int(self._annulus_inner.get() * scale)
+        r_out = int(self._annulus_outer.get() * scale)
+
+        # Draw target aperture (green)
+        if self._target_aperture is not None:
+            x, y = self._target_aperture
+            dx, dy = int(x * scale), int(y * scale)
+            cv2.circle(display_frame, (dx, dy), r_ap, (0, 255, 0), 2)  # Aperture
+            cv2.circle(display_frame, (dx, dy), r_in, (0, 255, 0), 2)  # Inner annulus
+            cv2.circle(display_frame, (dx, dy), r_out, (0, 255, 0), 2)  # Outer annulus
+            cv2.putText(display_frame, "T", (dx + r_out + 10, dy + 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+
+        # Draw comparison aperture (cyan)
+        if self._comparison_aperture is not None:
+            x, y = self._comparison_aperture
+            dx, dy = int(x * scale), int(y * scale)
+            cv2.circle(display_frame, (dx, dy), r_ap, (255, 255, 0), 2)  # Aperture
+            cv2.circle(display_frame, (dx, dy), r_in, (255, 255, 0), 2)  # Inner annulus
+            cv2.circle(display_frame, (dx, dy), r_out, (255, 255, 0), 2)  # Outer annulus
+            cv2.putText(display_frame, "C", (dx + r_out + 10, dy + 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 0), 3)
+
+        return display_frame
+
+    def _show_lightcurve(self):
+        """Show the lightcurve plot window."""
+        if not self._photometry_data:
+            logger.info("No photometry data to plot")
+            return
+
+        try:
+            import matplotlib
+            matplotlib.use('TkAgg')
+            import matplotlib.pyplot as plt
+            from matplotlib.animation import FuncAnimation
+        except ImportError:
+            logger.warning("matplotlib not available for lightcurve plotting")
+            return
+
+        # Create figure
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+        fig.canvas.manager.set_window_title("Live Lightcurve")
+
+        # Initialize lines
+        line_target, = ax1.plot([], [], 'g-', linewidth=1, label='Target')
+        line_comp, = ax1.plot([], [], 'c-', linewidth=1, label='Comparison')
+        line_rel, = ax2.plot([], [], 'b-', linewidth=1, marker='.', markersize=2)
+
+        ax1.set_ylabel("Raw Flux (ADU)")
+        ax1.set_title("Aperture Photometry")
+        ax1.legend(loc='upper right')
+        ax1.grid(True, alpha=0.3)
+
+        ax2.set_xlabel("Time (seconds)")
+        ax2.set_ylabel("Relative Flux (T/C)")
+        ax2.grid(True, alpha=0.3)
+
+        def update(frame):
+            if not self._photometry_data:
+                return line_target, line_comp, line_rel
+
+            # Extract data
+            t0 = self._photometry_data[0]['time']
+            times = [d['time'] - t0 for d in self._photometry_data]
+            target_flux = [d['target_flux'] for d in self._photometry_data if d['target_flux'] is not None]
+            comp_flux = [d['comp_flux'] for d in self._photometry_data if d['comp_flux'] is not None]
+            rel_flux = [d['relative_flux'] for d in self._photometry_data if d['relative_flux'] is not None]
+
+            # Filter times for each dataset
+            times_target = [d['time'] - t0 for d in self._photometry_data if d['target_flux'] is not None]
+            times_comp = [d['time'] - t0 for d in self._photometry_data if d['comp_flux'] is not None]
+            times_rel = [d['time'] - t0 for d in self._photometry_data if d['relative_flux'] is not None]
+
+            # Update lines
+            if times_target and target_flux:
+                line_target.set_data(times_target, target_flux)
+            if times_comp and comp_flux:
+                line_comp.set_data(times_comp, comp_flux)
+            if times_rel and rel_flux:
+                line_rel.set_data(times_rel, rel_flux)
+
+            # Adjust axes
+            ax1.relim()
+            ax1.autoscale_view()
+            ax2.relim()
+            ax2.autoscale_view()
+
+            # Update stats in title
+            if rel_flux:
+                mean_rel = np.mean(rel_flux)
+                std_rel = np.std(rel_flux)
+                ax2.set_title(f"Mean: {mean_rel:.4f}  Std: {std_rel:.4f} ({std_rel/mean_rel*100:.2f}%)")
+
+            return line_target, line_comp, line_rel
+
+        # Create animation
+        self._lightcurve_animation = FuncAnimation(fig, update, interval=500, blit=False, cache_frame_data=False)
+        self._lightcurve_fig = fig
+
+        plt.tight_layout()
+        plt.show(block=False)
+
+        logger.info(f"Lightcurve plot opened with {len(self._photometry_data)} data points")
