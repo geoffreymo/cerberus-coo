@@ -4,9 +4,12 @@
 import tkinter as tk
 from tkinter import ttk
 import numpy as np
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple, Callable
 import time
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     import cv2
@@ -23,7 +26,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
     Panel for live image display.
 
     Uses OpenCV for efficient image scaling and display.
-    Includes basic contrast controls.
+    Includes basic contrast controls and ROI selection via SHIFT+drag.
     """
 
     def __init__(self, parent, api: 'CerberusAPI', display_size: tuple = (640, 480)):
@@ -56,8 +59,24 @@ class ImageDisplayPanel(ttk.LabelFrame):
         # Mouse tracking for cursor value
         self._mouse_x = 0
         self._mouse_y = 0
-        self._display_width = 0
-        self._display_height = 0
+
+        # Scale factor for coordinate conversion (like v18)
+        # When we scale up small frames for display, track the factor
+        self._display_scale_factor = 1.0
+        self._min_display_size = 512  # Minimum display dimension
+
+        # ROI selection state (SHIFT+drag to select subwindow)
+        self._roi_selection_mode = False
+        self._roi_start_point: Optional[Tuple[int, int]] = None  # Image coordinates
+        self._roi_end_point: Optional[Tuple[int, int]] = None    # Image coordinates
+        self._roi_drag_active = False
+
+        # Callback for ROI selection complete
+        self.on_roi_selected: Optional[Callable[[int, int, int, int], None]] = None
+
+        # Current subarray offset (for nested ROI selection)
+        self._current_hpos = 0
+        self._current_vpos = 0
 
         self._create_widgets()
 
@@ -148,24 +167,13 @@ class ImageDisplayPanel(ttk.LabelFrame):
             main_x = root.winfo_x()
             main_y = root.winfo_y()
             main_width = root.winfo_width()
-            main_height = root.winfo_height()
 
             # Position OpenCV window to the right of main window
             display_x = main_x + main_width + 10
             display_y = main_y
 
-            # Calculate display width to maintain aspect ratio with main window height
-            # Camera sensor is 4096 x 2304 (16:9 aspect ratio)
-            display_height = main_height
-            display_width = int(display_height * 4096 / 2304)  # 16:9 aspect for camera
-
-            # Store display size for cursor coordinate conversion
-            self._display_width = display_width
-            self._display_height = display_height
-
-            # Move and resize the OpenCV window
+            # Move the window
             cv2.moveWindow(self._window_name, display_x, display_y)
-            cv2.resizeWindow(self._window_name, display_width, display_height)
 
         except Exception:
             pass  # Ignore positioning errors
@@ -184,13 +192,119 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self.display_btn.config(text="Open Display")
 
     def _mouse_callback(self, event, x, y, flags, param):
-        """OpenCV mouse callback for tracking cursor position."""
+        """OpenCV mouse callback for tracking cursor position and ROI selection."""
+        # Convert display coordinates to image coordinates
+        img_x, img_y = self._display_to_image_coords(x, y)
+
+        # Check if SHIFT is held
+        shift_held = (flags & cv2.EVENT_FLAG_SHIFTKEY) != 0
+
         if event == cv2.EVENT_MOUSEMOVE:
-            self._mouse_x = x
-            self._mouse_y = y
+            self._mouse_x = img_x
+            self._mouse_y = img_y
             # Update cursor value immediately on mouse move
             if self._last_frame is not None:
                 self._update_cursor_value(self._last_frame)
+
+            # Update ROI rectangle while dragging
+            if self._roi_start_point is not None:
+                if shift_held or self._roi_drag_active:
+                    self._roi_end_point = (img_x, img_y)
+
+        elif event == cv2.EVENT_LBUTTONDOWN:
+            # Start ROI selection if SHIFT is held
+            if shift_held:
+                self._roi_start_point = (img_x, img_y)
+                self._roi_end_point = (img_x, img_y)
+                self._roi_drag_active = True
+                logger.info(f"ROI selection started at ({img_x}, {img_y})")
+
+        elif event == cv2.EVENT_LBUTTONUP:
+            # Finish ROI selection
+            if self._roi_start_point is not None and self._roi_drag_active:
+                self._roi_end_point = (img_x, img_y)
+                self._roi_drag_active = False
+                self._finish_roi_selection()
+
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # Right-click to cancel ROI or show menu
+            if self._roi_drag_active:
+                self._cancel_roi_selection()
+
+    def _display_to_image_coords(self, display_x: int, display_y: int) -> Tuple[int, int]:
+        """Convert display window coordinates to image coordinates."""
+        if self._last_frame is None:
+            return display_x, display_y
+
+        img_height, img_width = self._last_frame.shape[:2]
+
+        # Convert display coords to image coords using tracked scale factor (like v18)
+        # When we scale up small frames, we divide mouse coords by that factor
+        scale = self._display_scale_factor
+        img_x = int(display_x / scale)
+        img_y = int(display_y / scale)
+
+        # Clamp to image bounds
+        img_x = max(0, min(img_x, img_width - 1))
+        img_y = max(0, min(img_y, img_height - 1))
+
+        return img_x, img_y
+
+    def _finish_roi_selection(self):
+        """Finish ROI selection and apply windowing."""
+        if self._roi_start_point is None or self._roi_end_point is None:
+            self._cancel_roi_selection()
+            return
+
+        x1, y1 = self._roi_start_point
+        x2, y2 = self._roi_end_point
+
+        # Ensure x1 < x2 and y1 < y2
+        left = min(x1, x2)
+        right = max(x1, x2)
+        top = min(y1, y2)
+        bottom = max(y1, y2)
+
+        # Check minimum size
+        if right - left < 16 or bottom - top < 16:
+            logger.warning("ROI too small (min 16x16)")
+            self._cancel_roi_selection()
+            return
+
+        # Convert to absolute sensor coordinates (add current subarray offset)
+        abs_left = left + self._current_hpos
+        abs_right = right + self._current_hpos
+        abs_top = top + self._current_vpos
+        abs_bottom = bottom + self._current_vpos
+
+        # Round to nearest 4 pixels (camera requirement)
+        hpos = (abs_left // 4) * 4
+        vpos = (abs_top // 4) * 4
+        hsize = ((abs_right - hpos + 3) // 4) * 4
+        vsize = ((abs_bottom - vpos + 3) // 4) * 4
+
+        logger.info(f"ROI selected: HPOS={hpos}, VPOS={vpos}, HSIZE={hsize}, VSIZE={vsize}")
+
+        # Clear ROI state
+        self._roi_start_point = None
+        self._roi_end_point = None
+        self._roi_drag_active = False
+
+        # Call callback if set
+        if self.on_roi_selected:
+            self.on_roi_selected(hpos, vpos, hsize, vsize)
+
+    def _cancel_roi_selection(self):
+        """Cancel ROI selection."""
+        self._roi_start_point = None
+        self._roi_end_point = None
+        self._roi_drag_active = False
+        logger.info("ROI selection cancelled")
+
+    def set_current_subarray_offset(self, hpos: int, vpos: int):
+        """Set current subarray offset for nested ROI selection."""
+        self._current_hpos = hpos
+        self._current_vpos = vpos
 
     def _display_loop(self):
         """Display loop (runs in MAIN THREAD via self.after to avoid Qt deadlocks)."""
@@ -207,9 +321,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         try:
             # Create window on first call (in main thread - no Qt deadlock!)
+            # Use WINDOW_NORMAL to allow user resize
             if not self._window_created:
                 cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-                cv2.resizeWindow(self._window_name, *self.display_size)
                 cv2.setMouseCallback(self._window_name, self._mouse_callback)
                 self._window_created = True
 
@@ -225,8 +339,33 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 self._last_frame = frame
                 self._update_stats(frame)
 
-                # Scale frame for display
+                # Scale frame for display (contrast)
                 display_frame = self._scale_frame(frame)
+
+                # Scale up small frames to fill display better (like v18)
+                # Track scale factor for mouse coordinate conversion
+                height, width = display_frame.shape[:2]
+
+                if width < self._min_display_size or height < self._min_display_size:
+                    # Calculate scale factor to make smallest dimension at least MIN_DISPLAY_SIZE
+                    # Use same factor for both dimensions to maintain aspect ratio
+                    scale_factor = max(
+                        self._min_display_size / width,
+                        self._min_display_size / height
+                    )
+                    new_width = int(width * scale_factor)
+                    new_height = int(height * scale_factor)
+                    display_frame = cv2.resize(
+                        display_frame,
+                        (new_width, new_height),
+                        interpolation=cv2.INTER_NEAREST
+                    )
+                    self._display_scale_factor = scale_factor
+                else:
+                    self._display_scale_factor = 1.0
+
+                # Draw ROI rectangle if selecting
+                display_frame = self._draw_roi_overlay(display_frame)
 
                 # Show frame (running in main thread - no deadlock!)
                 cv2.imshow(self._window_name, display_frame)
@@ -273,6 +412,36 @@ class ImageDisplayPanel(ttk.LabelFrame):
         scaled = ((scaled - vmin) / (vmax - vmin) * 255).astype(np.uint8)
 
         return scaled
+
+    def _draw_roi_overlay(self, display_frame: np.ndarray) -> np.ndarray:
+        """Draw ROI selection rectangle on display frame."""
+        if self._roi_start_point is None or self._roi_end_point is None:
+            return display_frame
+
+        # Convert to BGR for colored rectangle
+        if len(display_frame.shape) == 2:
+            display_frame = cv2.cvtColor(display_frame, cv2.COLOR_GRAY2BGR)
+
+        # Convert image coordinates to display coordinates using scale factor
+        scale = self._display_scale_factor
+        x1 = int(self._roi_start_point[0] * scale)
+        y1 = int(self._roi_start_point[1] * scale)
+        x2 = int(self._roi_end_point[0] * scale)
+        y2 = int(self._roi_end_point[1] * scale)
+
+        # Draw rectangle (green, 2px thick)
+        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        # Draw size text (in image pixels, not display pixels)
+        width = abs(self._roi_end_point[0] - self._roi_start_point[0])
+        height = abs(self._roi_end_point[1] - self._roi_start_point[1])
+        text = f"{width}x{height}"
+        text_x = min(x1, x2) + 5
+        text_y = min(y1, y2) - 10 if min(y1, y2) > 30 else max(y1, y2) + 20
+        cv2.putText(display_frame, text, (text_x, text_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+        return display_frame
 
     def _update_cursor_value(self, frame: np.ndarray):
         """Update cursor value from mouse position over display window."""

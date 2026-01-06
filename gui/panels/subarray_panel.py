@@ -3,7 +3,10 @@
 
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Callable
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ...api import CerberusAPI
@@ -14,6 +17,7 @@ class SubarrayPanel(ttk.LabelFrame):
     Panel for subarray (ROI) controls.
 
     Allows setting horizontal/vertical position and size for region-of-interest.
+    Note: Subarray changes require stopping streaming first.
     """
 
     def __init__(self, parent, api: 'CerberusAPI'):
@@ -26,6 +30,12 @@ class SubarrayPanel(ttk.LabelFrame):
         self.hsize_var = tk.StringVar(value="4096")
         self.vpos_var = tk.StringVar(value="0")
         self.vsize_var = tk.StringVar(value="2304")
+
+        # Callback for when subarray is reset (so display can update offset)
+        self.on_reset: Optional[Callable[[], None]] = None
+
+        # Status label for messages
+        self._status_var = tk.StringVar(value="")
 
         self._create_widgets()
 
@@ -85,12 +95,19 @@ class SubarrayPanel(ttk.LabelFrame):
         )
         self.reset_btn.pack(side=tk.LEFT, padx=2)
 
-        # Note
-        note_label = ttk.Label(
-            self, text="Values rounded to nearest 4",
+        # Notes
+        note_frame = ttk.Frame(self)
+        note_frame.pack(fill=tk.X)
+
+        ttk.Label(
+            note_frame, text="Values rounded to nearest 4",
             font=("TkDefaultFont", 9), foreground="gray"
-        )
-        note_label.pack(anchor=tk.W)
+        ).pack(anchor=tk.W)
+
+        ttk.Label(
+            note_frame, text="SHIFT+drag on display to select ROI",
+            font=("TkDefaultFont", 9), foreground="gray"
+        ).pack(anchor=tk.W)
 
     def _on_enable_toggle(self):
         """Handle enable checkbox toggle."""
@@ -103,10 +120,32 @@ class SubarrayPanel(ttk.LabelFrame):
         self.vsize_entry.config(state=state)
         self.apply_btn.config(state=state)
 
+        # Check if streaming - need to stop/restart
+        was_streaming = self.api.state.camera_streaming
+
+        if was_streaming:
+            logger.info("Stopping streaming to change subarray mode...")
+            self.api.stop_streaming()
+            # Give camera time to stop
+            self.after(200, lambda: self._apply_mode_change(enabled, was_streaming))
+        else:
+            self._apply_mode_change(enabled, False)
+
+    def _apply_mode_change(self, enabled: bool, restart_streaming: bool):
+        """Apply subarray mode change after streaming stopped."""
         # Set subarray mode
         # SUBARRAY_MODE: 1.0 = OFF, 2.0 = ON
         mode = 2.0 if enabled else 1.0
-        self.api.set_camera_property("SUBARRAY_MODE", mode)
+        result = self.api.set_camera_property("SUBARRAY_MODE", mode)
+
+        if result:
+            logger.info(f"Subarray mode set to {'ON' if enabled else 'OFF'}")
+        else:
+            logger.error("Failed to set subarray mode")
+
+        # Restart streaming if it was running
+        if restart_streaming:
+            self.after(100, self.api.start_streaming)
 
     def _on_apply(self):
         """Apply subarray settings."""
@@ -128,14 +167,35 @@ class SubarrayPanel(ttk.LabelFrame):
             self.vpos_var.set(str(vpos))
             self.vsize_var.set(str(vsize))
 
-            # Apply to camera
-            self.api.set_camera_property("SUBARRAY_HPOS", float(hpos))
-            self.api.set_camera_property("SUBARRAY_HSIZE", float(hsize))
-            self.api.set_camera_property("SUBARRAY_VPOS", float(vpos))
-            self.api.set_camera_property("SUBARRAY_VSIZE", float(vsize))
+            # Check if streaming - need to stop/restart
+            was_streaming = self.api.state.camera_streaming
+
+            if was_streaming:
+                logger.info("Stopping streaming to change subarray settings...")
+                self.api.stop_streaming()
+                # Give camera time to stop, then apply
+                self.after(200, lambda: self._apply_subarray_params(
+                    hpos, hsize, vpos, vsize, was_streaming))
+            else:
+                self._apply_subarray_params(hpos, hsize, vpos, vsize, False)
 
         except ValueError:
-            pass
+            logger.error("Invalid subarray values")
+
+    def _apply_subarray_params(self, hpos: int, hsize: int, vpos: int, vsize: int,
+                                restart_streaming: bool):
+        """Apply subarray parameters after streaming stopped."""
+        logger.info(f"Applying subarray: HPOS={hpos}, VPOS={vpos}, HSIZE={hsize}, VSIZE={vsize}")
+
+        # Apply to camera
+        self.api.set_camera_property("SUBARRAY_HPOS", float(hpos))
+        self.api.set_camera_property("SUBARRAY_HSIZE", float(hsize))
+        self.api.set_camera_property("SUBARRAY_VPOS", float(vpos))
+        self.api.set_camera_property("SUBARRAY_VSIZE", float(vsize))
+
+        # Restart streaming if it was running
+        if restart_streaming:
+            self.after(100, self.api.start_streaming)
 
     def _on_reset(self):
         """Reset subarray to full frame."""
@@ -149,7 +209,76 @@ class SubarrayPanel(ttk.LabelFrame):
         self.vpos_var.set("0")
         self.vsize_var.set("2304")
 
+        # Notify callback (e.g., to reset display panel offset)
+        if self.on_reset:
+            self.on_reset()
+
     def update_from_state(self, state):
         """Update panel from system state."""
         # Could be extended to read current values from camera
         pass
+
+    def apply_roi(self, hpos: int, vpos: int, hsize: int, vsize: int):
+        """
+        Apply ROI windowing settings from external source (e.g., image display drag).
+
+        Args:
+            hpos: Horizontal position (already rounded to 4)
+            vpos: Vertical position (already rounded to 4)
+            hsize: Horizontal size (already rounded to 4)
+            vsize: Vertical size (already rounded to 4)
+        """
+        logger.info(f"Applying ROI from drag: {hsize}x{vsize} at ({hpos}, {vpos})")
+
+        # Update UI state
+        self.enabled_var.set(True)
+        self.hpos_entry.config(state=tk.NORMAL)
+        self.hsize_entry.config(state=tk.NORMAL)
+        self.vpos_entry.config(state=tk.NORMAL)
+        self.vsize_entry.config(state=tk.NORMAL)
+        self.apply_btn.config(state=tk.NORMAL)
+
+        # Set values in UI
+        self.hpos_var.set(str(hpos))
+        self.vpos_var.set(str(vpos))
+        self.hsize_var.set(str(hsize))
+        self.vsize_var.set(str(vsize))
+
+        # Check if streaming - need to stop/restart
+        was_streaming = self.api.state.camera_streaming
+
+        if was_streaming:
+            logger.info("Stopping streaming to apply ROI...")
+            self.api.stop_streaming()
+            # Give camera time to stop, then apply all settings
+            self.after(200, lambda: self._apply_roi_settings(
+                hpos, vpos, hsize, vsize, was_streaming))
+        else:
+            self._apply_roi_settings(hpos, vpos, hsize, vsize, False)
+
+    def _apply_roi_settings(self, hpos: int, vpos: int, hsize: int, vsize: int,
+                            restart_streaming: bool):
+        """Apply all ROI settings at once after streaming stopped."""
+        # Enable subarray mode first
+        self.api.set_camera_property("SUBARRAY_MODE", 2.0)
+
+        # Apply position/size
+        self.api.set_camera_property("SUBARRAY_HPOS", float(hpos))
+        self.api.set_camera_property("SUBARRAY_HSIZE", float(hsize))
+        self.api.set_camera_property("SUBARRAY_VPOS", float(vpos))
+        self.api.set_camera_property("SUBARRAY_VSIZE", float(vsize))
+
+        logger.info(f"ROI applied: {hsize}x{vsize} at ({hpos}, {vpos})")
+
+        # Restart streaming if it was running
+        if restart_streaming:
+            self.after(100, self.api.start_streaming)
+
+    def get_current_offset(self) -> tuple:
+        """Get current subarray offset (HPOS, VPOS)."""
+        if self.enabled_var.get():
+            try:
+                return int(self.hpos_var.get()), int(self.vpos_var.get())
+            except ValueError:
+                pass
+        return 0, 0

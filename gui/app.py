@@ -180,6 +180,12 @@ class CerberusGUI:
         # Connect camera panel to display panel for auto-open on start
         self.camera_panel.set_display_panel(self.display_panel)
 
+        # Connect display panel ROI selection to subarray panel
+        self.display_panel.on_roi_selected = self._on_roi_selected
+
+        # Connect subarray panel reset to display panel offset reset
+        self.subarray_panel.on_reset = self._on_subarray_reset
+
     def _on_status_change(self, state):
         """Handle status change from API."""
         # Schedule update in main thread
@@ -213,6 +219,21 @@ class CerberusGUI:
             if 'popdown' not in err_str:
                 if not self._closing:
                     logger.error(f"Error updating panels: {e}")
+
+    def _on_roi_selected(self, hpos: int, vpos: int, hsize: int, vsize: int):
+        """Handle ROI selection from display panel (SHIFT+drag)."""
+        logger.info(f"ROI selected: {hsize}x{vsize} at ({hpos}, {vpos})")
+
+        # Apply to subarray panel (this will also apply to camera)
+        self.subarray_panel.apply_roi(hpos, vpos, hsize, vsize)
+
+        # Update display panel's knowledge of current offset for nested ROI selection
+        self.display_panel.set_current_subarray_offset(hpos, vpos)
+
+    def _on_subarray_reset(self):
+        """Handle subarray reset - reset display panel offset."""
+        logger.info("Subarray reset to full frame")
+        self.display_panel.set_current_subarray_offset(0, 0)
 
     def _open_focus_window(self):
         """Open the focus loop window."""
