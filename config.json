@@ -88,5 +88,15 @@
         "status_update_interval_ms": 1000,
         "default_object_name": "Object",
         "default_focus_display_mm": 35.0
+    },
+
+    "guiding": {
+        "averaging_window_seconds": 15.0,
+        "correction_threshold_arcsec": 0.1,
+        "max_correction_arcsec": 5.0,
+        "correction_interval_seconds": 5.0,
+        "guide_gain": 0.8,
+        "x_to_ra_sign": -1,
+        "y_to_dec_sign": -1
     }
 }

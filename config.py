@@ -94,6 +94,19 @@ class GUIConfig:
 
 
 @dataclass
+class GuidingConfig:
+    """Autoguiding configuration."""
+    averaging_window_seconds: float = 15.0  # Window for averaging positions
+    correction_threshold_arcsec: float = 0.1  # Min drift before correcting
+    max_correction_arcsec: float = 5.0  # Safety limit per correction
+    correction_interval_seconds: float = 5.0  # Time between corrections
+    guide_gain: float = 0.8  # Fraction of error to correct (0-1)
+    # Coordinate mapping (depends on camera orientation)
+    x_to_ra_sign: int = -1  # +1 or -1: how +X pixel maps to RA
+    y_to_dec_sign: int = -1  # +1 or -1: how +Y pixel maps to Dec
+
+
+@dataclass
 class CerberusConfig:
     """Complete Cerberus system configuration."""
     telescope: TelescopeConfig = field(default_factory=TelescopeConfig)
@@ -104,6 +117,7 @@ class CerberusConfig:
     acquisition: AcquisitionConfig = field(default_factory=AcquisitionConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     gui: GUIConfig = field(default_factory=GUIConfig)
+    guiding: GuidingConfig = field(default_factory=GuidingConfig)
 
     def get_filter_focus_offset(self, filter_name: str) -> float:
         """
@@ -176,6 +190,7 @@ def load_config(config_path: str = None) -> CerberusConfig:
         acquisition = AcquisitionConfig(**data.get('acquisition', {}))
         paths = PathsConfig(**data.get('paths', {}))
         gui = GUIConfig(**data.get('gui', {}))
+        guiding = GuidingConfig(**data.get('guiding', {}))
 
         _config = CerberusConfig(
             telescope=telescope,
@@ -185,7 +200,8 @@ def load_config(config_path: str = None) -> CerberusConfig:
             instrument=instrument,
             acquisition=acquisition,
             paths=paths,
-            gui=gui
+            gui=gui,
+            guiding=guiding
         )
 
         return _config

@@ -105,6 +105,15 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._lightcurve_fig = None
         self._last_photometry_time = 0  # Rate limiting
 
+        # Guiding state
+        self._guiding_config = config.guiding
+        self._guiding_enabled = False
+        self._guiding_calibrating = False
+        self._guiding_reference: Optional[Tuple[float, float]] = None  # (x, y) reference position in pixels
+        self._position_history: list = []  # [(timestamp, x_offset, y_offset), ...]
+        self._last_correction_time = 0
+        self._guiding_calibration_start = 0  # When calibration started
+
         self._create_widgets()
 
     def _create_widgets(self):
@@ -147,6 +156,31 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         ttk.Label(
             fwhm_frame, text="(Right-click on star)",
+            font=("TkDefaultFont", 9), foreground="gray"
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        # Guiding controls
+        guiding_frame = ttk.LabelFrame(self, text="Guiding", padding=3)
+        guiding_frame.pack(fill=tk.X, pady=2)
+
+        guiding_row = ttk.Frame(guiding_frame)
+        guiding_row.pack(fill=tk.X)
+
+        self._guiding_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            guiding_row, text="Enable", variable=self._guiding_enabled_var,
+            command=self._toggle_guiding
+        ).pack(side=tk.LEFT)
+
+        self._guiding_status_var = tk.StringVar(value="Not guiding")
+        ttk.Label(guiding_row, textvariable=self._guiding_status_var, width=30).pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Button(
+            guiding_row, text="Reset Ref", command=self._reset_guiding_reference, width=8
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Label(
+            guiding_row, text="(Set FWHM target first)",
             font=("TkDefaultFont", 9), foreground="gray"
         ).pack(side=tk.LEFT, padx=(10, 0))
 
@@ -450,21 +484,24 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self.fwhm_var.set("--")
         logger.info("FWHM tracking cleared")
 
-    def _measure_fwhm_gaussian(self, frame: np.ndarray) -> Optional[float]:
+    def _measure_fwhm_gaussian(self, frame: np.ndarray) -> Tuple[Optional[float], Optional[Tuple[float, float]]]:
         """
-        Measure FWHM using 2D Gaussian fit.
+        Measure FWHM and centroid using 2D Gaussian fit.
 
-        Returns FWHM in pixels, or None if fit fails.
+        Returns:
+            Tuple of (fwhm_pixels, centroid_offset) where:
+            - fwhm_pixels: FWHM in pixels, or None if fit fails
+            - centroid_offset: (dx, dy) offset in pixels from target position, or None if fit fails
         """
         if self._fwhm_target is None or frame is None:
-            return None
+            return None, None
 
         try:
             from scipy.optimize import curve_fit
             from scipy.ndimage import center_of_mass
         except ImportError:
             logger.warning("scipy not available for Gaussian fitting")
-            return None
+            return None, None
 
         cx, cy = self._fwhm_target
         half_box = self._fwhm_box_size // 2
@@ -476,7 +513,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
         # Bounds check
         height, width = frame.shape[:2]
         if y1 < 0 or y2 > height or x1 < 0 or x2 > width:
-            return None
+            return None, None
 
         cutout = frame[y1:y2, x1:x2].astype(np.float64)
 
@@ -539,32 +576,47 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
             # Sanity checks
             if fwhm_pixels < 1 or fwhm_pixels > self._fwhm_box_size:
-                return None
+                return None, None
 
-            return float(fwhm_pixels)
+            # Centroid offset from target (in pixels)
+            # x0, y0 are in cutout coordinates (0 to box_size)
+            # half_box is the center of the cutout
+            centroid_offset = (float(x0 - half_box), float(y0 - half_box))
+
+            return float(fwhm_pixels), centroid_offset
 
         except Exception as e:
             logger.debug(f"Gaussian fit failed: {e}")
-            return None
+            return None, None
 
     def _update_fwhm(self, frame: np.ndarray):
         """Update FWHM measurement and history."""
         if self._fwhm_target is None:
             return
 
-        fwhm_pixels = self._measure_fwhm_gaussian(frame)
+        fwhm_pixels, centroid_offset = self._measure_fwhm_gaussian(frame)
 
-        if fwhm_pixels is not None:
+        if fwhm_pixels is not None and centroid_offset is not None:
             fwhm_arcsec = fwhm_pixels * self._plate_scale
             self._fwhm_value = fwhm_arcsec
 
-            # Update history
+            # Update FWHM history
             timestamp = time.time()
             self._fwhm_history.append((timestamp, fwhm_arcsec))
 
             # Trim history if too long
             if len(self._fwhm_history) > self._fwhm_history_max:
                 self._fwhm_history = self._fwhm_history[-self._fwhm_history_max:]
+
+            # Update position history for guiding
+            self._position_history.append((timestamp, centroid_offset[0], centroid_offset[1]))
+
+            # Trim position history (keep 2x averaging window worth)
+            max_history_seconds = self._guiding_config.averaging_window_seconds * 2
+            cutoff_time = timestamp - max_history_seconds
+            self._position_history = [
+                (t, x, y) for t, x, y in self._position_history if t >= cutoff_time
+            ]
 
             # Update display
             self.fwhm_var.set(f"{fwhm_arcsec:.3f}\"")
@@ -750,6 +802,10 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 # Update photometry measurement
                 self._update_photometry(frame)
 
+                # Update guiding (throttled - every 10th frame, ~5 Hz)
+                if self._guiding_enabled and self._frame_count % 10 == 0:
+                    self._update_guiding()
+
                 # Draw ROI rectangle if selecting
                 display_frame = self._draw_roi_overlay(display_frame)
 
@@ -878,6 +934,178 @@ class ImageDisplayPanel(ttk.LabelFrame):
     def update_from_state(self, state):
         """Update panel from system state."""
         pass  # Stats are updated in display loop
+
+    # ===== Guiding Methods =====
+
+    def _toggle_guiding(self):
+        """Toggle guiding on/off."""
+        if self._guiding_enabled_var.get():
+            self._start_guiding()
+        else:
+            self._stop_guiding()
+
+    def _start_guiding(self):
+        """Start guiding - enter calibration mode."""
+        if self._fwhm_target is None:
+            logger.warning("Cannot start guiding: no FWHM target set")
+            self._guiding_enabled_var.set(False)
+            self._guiding_status_var.set("Set FWHM target first!")
+            return
+
+        if not self.api.state.telescope_connected:
+            logger.warning("Cannot start guiding: telescope not connected")
+            self._guiding_enabled_var.set(False)
+            self._guiding_status_var.set("Telescope not connected!")
+            return
+
+        logger.info("Starting guiding calibration...")
+        self._guiding_enabled = True
+        self._guiding_calibrating = True
+        self._guiding_reference = None
+        self._position_history = []
+        self._guiding_calibration_start = time.time()
+        self._last_correction_time = 0
+        self._guiding_status_var.set("Calibrating...")
+
+    def _stop_guiding(self):
+        """Stop guiding."""
+        logger.info("Stopping guiding")
+        self._guiding_enabled = False
+        self._guiding_calibrating = False
+        self._guiding_reference = None
+        self._guiding_status_var.set("Not guiding")
+
+    def _reset_guiding_reference(self):
+        """Reset and recalibrate reference position."""
+        if not self._guiding_enabled:
+            return
+
+        logger.info("Resetting guiding reference - recalibrating...")
+        self._guiding_calibrating = True
+        self._guiding_reference = None
+        self._position_history = []
+        self._guiding_calibration_start = time.time()
+        self._guiding_status_var.set("Calibrating...")
+
+    def _compute_average_position(self, window_seconds: float) -> Optional[Tuple[float, float]]:
+        """
+        Compute average centroid position over time window.
+
+        Args:
+            window_seconds: Time window in seconds
+
+        Returns:
+            (avg_x, avg_y) or None if insufficient data
+        """
+        if not self._position_history:
+            return None
+
+        now = time.time()
+        cutoff = now - window_seconds
+
+        # Filter to recent positions
+        recent = [(t, x, y) for t, x, y in self._position_history if t >= cutoff]
+
+        if len(recent) < 3:  # Need at least 3 samples
+            return None
+
+        avg_x = np.mean([x for _, x, _ in recent])
+        avg_y = np.mean([y for _, _, y in recent])
+
+        return (float(avg_x), float(avg_y))
+
+    def _update_guiding(self):
+        """
+        Update guiding state and apply corrections if needed.
+
+        Called from display loop when guiding is enabled.
+        """
+        if not self._guiding_enabled:
+            return
+
+        now = time.time()
+        window = self._guiding_config.averaging_window_seconds
+
+        if self._guiding_calibrating:
+            # In calibration mode - collecting reference position
+            elapsed = now - self._guiding_calibration_start
+            remaining = window - elapsed
+
+            if remaining > 0:
+                self._guiding_status_var.set(f"Calibrating... {remaining:.1f}s")
+            else:
+                # Calibration complete - compute reference
+                ref = self._compute_average_position(window)
+                if ref is not None:
+                    self._guiding_reference = ref
+                    self._guiding_calibrating = False
+                    self._last_correction_time = now
+                    logger.info(f"Guiding reference set: ({ref[0]:.2f}, {ref[1]:.2f}) pixels")
+                    self._guiding_status_var.set("Guiding active")
+                else:
+                    # Not enough data, extend calibration
+                    self._guiding_status_var.set("Calibrating... (waiting for data)")
+        else:
+            # Active guiding - compare current position to reference
+            current = self._compute_average_position(window)
+
+            if current is None or self._guiding_reference is None:
+                self._guiding_status_var.set("Guiding (waiting for data)")
+                return
+
+            # Compute drift in pixels
+            drift_x = current[0] - self._guiding_reference[0]
+            drift_y = current[1] - self._guiding_reference[1]
+
+            # Convert to arcseconds
+            drift_x_arcsec = drift_x * self._plate_scale
+            drift_y_arcsec = drift_y * self._plate_scale
+            drift_total_arcsec = np.sqrt(drift_x_arcsec**2 + drift_y_arcsec**2)
+
+            # Update status
+            self._guiding_status_var.set(
+                f"Drift: {drift_total_arcsec:.2f}\" ({drift_x_arcsec:+.2f}, {drift_y_arcsec:+.2f})"
+            )
+
+            # Check if correction is needed
+            threshold = self._guiding_config.correction_threshold_arcsec
+            interval = self._guiding_config.correction_interval_seconds
+
+            if drift_total_arcsec >= threshold and (now - self._last_correction_time) >= interval:
+                self._apply_guiding_correction(drift_x_arcsec, drift_y_arcsec)
+
+    def _apply_guiding_correction(self, drift_x_arcsec: float, drift_y_arcsec: float):
+        """
+        Apply a guiding correction to the telescope.
+
+        Args:
+            drift_x_arcsec: X drift in arcseconds (pixel coordinates)
+            drift_y_arcsec: Y drift in arcseconds (pixel coordinates)
+        """
+        config = self._guiding_config
+
+        # Apply coordinate sign mapping and gain
+        ra_correction = drift_x_arcsec * config.x_to_ra_sign * config.guide_gain
+        dec_correction = drift_y_arcsec * config.y_to_dec_sign * config.guide_gain
+
+        # Apply max correction limit
+        max_corr = config.max_correction_arcsec
+        ra_correction = np.clip(ra_correction, -max_corr, max_corr)
+        dec_correction = np.clip(dec_correction, -max_corr, max_corr)
+
+        # Apply correction
+        logger.info(f"Applying guiding correction: RA={ra_correction:+.3f}\", Dec={dec_correction:+.3f}\"")
+
+        try:
+            success = self.api.move_offset(ra_correction, dec_correction)
+            if success:
+                self._last_correction_time = time.time()
+                # Clear position history after correction to let new reference settle
+                self._position_history = []
+            else:
+                logger.warning("Guiding correction failed")
+        except Exception as e:
+            logger.error(f"Error applying guiding correction: {e}")
 
     def cleanup(self):
         """Cleanup resources."""
