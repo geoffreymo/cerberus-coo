@@ -267,6 +267,145 @@ class CerberusAPI:
         """
         return self.camera.capture_single(timeout_ms)
 
+    def capture_single_to_fits(
+        self,
+        filepath: str,
+        object_name: str = "single",
+        comment: str = "",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout_ms: int = 30000
+    ) -> Optional[str]:
+        """
+        Capture a single frame and save to FITS file.
+
+        Uses the same header structure as regular streaming captures.
+
+        Args:
+            filepath: Output FITS file path
+            object_name: Object name for FITS header
+            comment: Optional comment for FITS header
+            extra_headers: Optional dict of additional header items
+                           e.g. {'FOCUS': (35.0, 'Focus position mm')}
+            timeout_ms: Capture timeout in milliseconds
+
+        Returns:
+            Filepath if successful, None if failed
+        """
+        import os
+        import time
+        import warnings
+        from datetime import datetime, timezone
+        from astropy.io import fits
+        from astropy.io.fits.verify import VerifyWarning
+
+        # Suppress HIERARCH keyword warnings
+        warnings.filterwarnings('ignore', category=VerifyWarning, message='.*HIERARCH.*')
+        warnings.filterwarnings('ignore', category=VerifyWarning, message='.*Card is too long.*')
+
+        if not self._state.camera_connected:
+            logger.error("Cannot capture: camera not connected")
+            return None
+
+        if self._state.camera_streaming:
+            logger.error("Cannot capture single while streaming")
+            return None
+
+        # Capture frame
+        logger.info(f"Capturing single frame to {filepath}")
+        frame = self.camera.capture_single(timeout_ms)
+        if frame is None:
+            logger.error("Failed to capture frame")
+            return None
+
+        capture_time = time.time()
+
+        try:
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+            # Build FITS header (same structure as save_thread)
+            primary_hdr = fits.Header()
+            primary_hdr['OBJECT'] = (object_name, 'Object name')
+            primary_hdr['NFRAMES'] = (1, 'Number of frames')
+
+            # UTC timestamp
+            utc_now = datetime.now(timezone.utc)
+            primary_hdr['DATE-OBS'] = (utc_now.isoformat(), 'UTC observation time')
+
+            # Comment if provided
+            if comment:
+                primary_hdr['COMMENT'] = comment
+
+            # Filter name
+            if self.filterwheel and self._state.filterwheel_connected:
+                try:
+                    filter_name = self.filterwheel.filter
+                    if filter_name:
+                        primary_hdr['FILTER'] = (filter_name, 'Filter name')
+                except:
+                    pass
+
+            # Exposure time
+            if self._state.camera_exposure:
+                primary_hdr['EXPTIME'] = (self._state.camera_exposure, 'Exposure time (s)')
+
+            # Telescope info if connected
+            if self._state.telescope_connected:
+                if self._state.telescope_ra:
+                    primary_hdr['RA'] = (self._state.telescope_ra, 'Right Ascension')
+                if self._state.telescope_dec:
+                    primary_hdr['DEC'] = (self._state.telescope_dec, 'Declination')
+                if self._state.telescope_ha:
+                    primary_hdr['HA'] = (self._state.telescope_ha, 'Hour Angle')
+                if self._state.telescope_airmass:
+                    primary_hdr['AIRMASS'] = (self._state.telescope_airmass, 'Airmass')
+                if self._state.telescope_focus is not None:
+                    primary_hdr['TELFOCUS'] = (self._state.telescope_focus, 'Telescope focus (mm)')
+
+            # Extra headers (e.g. focus position for focus loop)
+            if extra_headers:
+                for key, value in extra_headers.items():
+                    try:
+                        primary_hdr[key] = value
+                    except:
+                        pass
+
+            # Primary HDU (header only)
+            primary_hdu = fits.PrimaryHDU(header=primary_hdr)
+
+            # ImageHDU for data
+            image_hdu = fits.ImageHDU(data=frame)
+            image_hdu.header['EXTNAME'] = 'DATA'
+
+            # Add camera parameters
+            camera_params = self.camera.get_all_params()
+            for key, value in camera_params.items():
+                try:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore")
+                        image_hdu.header[key[:8]] = value
+                except:
+                    pass
+
+            # BinTableHDU for timestamp (single entry)
+            col1 = fits.Column(name='TIMESTAMP', format='D', array=[capture_time])
+            col2 = fits.Column(name='FRAMESTAMP', format='K', array=[0])
+            timestamp_hdu = fits.BinTableHDU.from_columns([col1, col2])
+            timestamp_hdu.header['EXTNAME'] = 'TIMESTAMPS'
+
+            # Write FITS file
+            hdul = fits.HDUList([primary_hdu, image_hdu, timestamp_hdu])
+            hdul.writeto(filepath, overwrite=True)
+
+            file_size_mb = os.path.getsize(filepath) / 1e6
+            logger.info(f"Saved {filepath} ({file_size_mb:.1f} MB)")
+
+            return filepath
+
+        except Exception as e:
+            logger.error(f"Failed to save FITS: {e}")
+            return None
+
     # ==========================================================================
     # Acquisition Control
     # ==========================================================================
@@ -854,12 +993,13 @@ class CerberusAPI:
         self._notify_status_change()
 
         try:
-            # Create focus loop with our hardware
+            # Create focus loop with our hardware and API for unified imaging
             focus_loop = FocusLoop(
                 camera=self.camera,
                 telescope=self.telescope,
                 filterwheel=self.filterwheel,
-                config=config
+                config=config,
+                api=self
             )
 
             # Store reference for abort

@@ -135,7 +135,8 @@ class FocusLoop:
         telescope,  # TCSClient instance
         filterwheel=None,  # Optional FilterWheel instance
         config: FocusLoopConfig = None,
-        analyzer: FocusAnalyzer = None
+        analyzer: FocusAnalyzer = None,
+        api=None  # Optional CerberusAPI for unified imaging
     ):
         """
         Initialize FocusLoop.
@@ -146,12 +147,14 @@ class FocusLoop:
             filterwheel: Optional FilterWheel instance
             config: FocusLoopConfig (uses defaults if None)
             analyzer: FocusAnalyzer instance (creates default if None)
+            api: Optional CerberusAPI instance for unified FITS capture
         """
         self.camera = camera
         self.telescope = telescope
         self.filterwheel = filterwheel
         self.config = config or FocusLoopConfig()
         self.analyzer = analyzer or FocusAnalyzer()
+        self.api = api
 
         self.logger = logging.getLogger(__name__)
         self.state = FocusLoopState.IDLE
@@ -207,11 +210,10 @@ class FocusLoop:
         # Wait for settle
         time.sleep(self.config.settle_time)
 
-        # Capture - use filter-specific exposure if available
+        # Set exposure - use filter-specific exposure if available
         exposure = self.config.filter_exposures.get(filter_name, self.config.exposure_time)
         self.logger.info(f"Capturing {exposure}s exposure")
         self.camera.set_exposure(exposure)
-        frame = self.camera.capture_single()
 
         # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -222,15 +224,36 @@ class FocusLoop:
 
         filepath = os.path.join(self.config.output_dir, filename)
 
-        # Save with metadata
-        header = {
+        # Build extra headers for focus-specific metadata
+        extra_headers = {
             'FOCUS': (position, 'Focus position in mm'),
-            'OBJECT': (self.config.object_name, 'Object name'),
         }
-        if filter_name:
-            header['FILTER'] = (filter_name, 'Filter name')
 
-        self.camera.save_fits(frame, filepath, header_extra=header)
+        # Use API's capture_single_to_fits if available (same controller as regular imaging)
+        # Otherwise fall back to direct camera capture
+        if hasattr(self, 'api') and self.api is not None:
+            result = self.api.capture_single_to_fits(
+                filepath=filepath,
+                object_name=self.config.object_name,
+                extra_headers=extra_headers
+            )
+            if result is None:
+                raise RuntimeError("Failed to capture focus image via API")
+        else:
+            # Fallback: direct camera capture (legacy path)
+            frame = self.camera.capture_single()
+            if frame is None:
+                raise RuntimeError("Failed to capture focus image")
+
+            # Save with metadata
+            header = {
+                'FOCUS': (position, 'Focus position in mm'),
+                'OBJECT': (self.config.object_name, 'Object name'),
+            }
+            if filter_name:
+                header['FILTER'] = (filter_name, 'Filter name')
+
+            self.camera.save_fits(frame, filepath, header_extra=header)
 
         return filepath
 
