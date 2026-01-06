@@ -170,10 +170,21 @@ class MockTelescope:
         self.focus_mm = initial_focus
         self.logger = logging.getLogger(__name__)
 
-    def set_focus(self, position: float):
-        """Simulate focus move."""
+    def set_focus(self, position: float) -> bool:
+        """Simulate focus move. Returns True on success (like real TCS)."""
         self.logger.info(f"[MockTelescope] Moving focus: {self.focus_mm:.2f} -> {position:.2f} mm")
         self.focus_mm = position
+        return True  # Simulate successful TCS response
+
+    def get_focus(self) -> float:
+        """Get current focus position."""
+        return self.focus_mm
+
+    def wait_for_focus(self, target_mm: float, tolerance_mm: float = 0.1,
+                       timeout_sec: float = 60.0, poll_interval: float = 0.5) -> bool:
+        """Simulate waiting for focus (instant in simulation)."""
+        self.logger.info(f"[MockTelescope] Focus at target: {self.focus_mm:.2f} mm")
+        return True
 
     def get_status(self) -> MockTelescopeStatus:
         """Return mock status."""

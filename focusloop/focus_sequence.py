@@ -203,11 +203,22 @@ class FocusLoop:
         Returns:
             Path to saved FITS file
         """
-        # Move focus
+        # Move focus and verify TCS accepted the command
         self.logger.info(f"Moving focus to {position:.2f} mm")
-        self.telescope.set_focus(position)
+        result = self.telescope.set_focus(position)
+        if result is False:  # Explicitly check for False (not None)
+            raise RuntimeError(f"TCS rejected focus command to {position:.2f} mm")
 
-        # Wait for settle
+        # Wait for focus to reach target position
+        if hasattr(self.telescope, 'wait_for_focus'):
+            # Real telescope: poll until focus reaches target
+            if not self.telescope.wait_for_focus(position, tolerance_mm=1.0, timeout_sec=60.0):
+                raise RuntimeError(f"Focus move timed out waiting to reach {position:.2f} mm")
+        else:
+            # Mock telescope or legacy: use fixed settle time
+            time.sleep(self.config.settle_time)
+
+        # Additional settle time for mechanical vibration
         time.sleep(self.config.settle_time)
 
         # Set exposure - use filter-specific exposure if available
@@ -382,8 +393,11 @@ class FocusLoop:
                 # Apply best focus for this filter if successful
                 if result.success and self.config.auto_apply_best:
                     try:
-                        self.telescope.set_focus(result.best_focus)
-                        self.logger.info(f"Applied best focus: {result.best_focus:.2f} mm")
+                        focus_result = self.telescope.set_focus(result.best_focus)
+                        if focus_result is False:
+                            self.logger.error(f"TCS rejected best focus command: {result.best_focus:.2f} mm")
+                        else:
+                            self.logger.info(f"Applied best focus: {result.best_focus:.2f} mm")
                     except Exception as e:
                         self.logger.error(f"Failed to apply best focus: {e}")
         else:
@@ -394,8 +408,11 @@ class FocusLoop:
             # Apply best focus
             if result.success and self.config.auto_apply_best:
                 try:
-                    self.telescope.set_focus(result.best_focus)
-                    self.logger.info(f"Applied best focus: {result.best_focus:.2f} mm")
+                    focus_result = self.telescope.set_focus(result.best_focus)
+                    if focus_result is False:
+                        self.logger.error(f"TCS rejected best focus command: {result.best_focus:.2f} mm")
+                    else:
+                        self.logger.info(f"Applied best focus: {result.best_focus:.2f} mm")
                 except Exception as e:
                     self.logger.error(f"Failed to apply best focus: {e}")
 

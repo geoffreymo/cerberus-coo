@@ -242,6 +242,62 @@ class TelescopeController:
             logger.error(f"Error getting focus status: {e}")
             return None
 
+    def wait_for_focus(self, target_mm: float, tolerance_mm: float = 1.0,
+                       timeout_sec: float = 60.0, poll_interval: float = 0.5) -> bool:
+        """
+        Wait for focus to reach target position.
+
+        Polls the TCS until focus is within tolerance of target or timeout.
+
+        Args:
+            target_mm: Target focus position in mm
+            tolerance_mm: Acceptable error in mm (default 1.0mm)
+            timeout_sec: Maximum wait time in seconds (default 60s)
+            poll_interval: Time between polls in seconds (default 0.5s)
+
+        Returns:
+            True if focus reached target within tolerance, False if timeout
+        """
+        import time
+
+        if not self._is_connected or self._client is None:
+            logger.error("Not connected to TCS")
+            return False
+
+        start_time = time.time()
+        last_focus = None
+
+        while (time.time() - start_time) < timeout_sec:
+            try:
+                current_focus = self.get_focus()
+                if current_focus is None:
+                    logger.warning("Failed to get focus position, retrying...")
+                    time.sleep(poll_interval)
+                    continue
+
+                error = abs(current_focus - target_mm)
+                if error <= tolerance_mm:
+                    logger.info(f"Focus reached target: {current_focus:.2f} mm "
+                               f"(target: {target_mm:.2f} mm, error: {error:.3f} mm)")
+                    return True
+
+                # Log progress if focus is moving
+                if last_focus is not None and last_focus != current_focus:
+                    logger.debug(f"Focus moving: {current_focus:.2f} mm -> {target_mm:.2f} mm")
+                last_focus = current_focus
+
+                time.sleep(poll_interval)
+
+            except Exception as e:
+                logger.warning(f"Error polling focus: {e}")
+                time.sleep(poll_interval)
+
+        # Timeout
+        current_focus = self.get_focus()
+        logger.error(f"Focus move timeout after {timeout_sec}s. "
+                    f"Current: {current_focus}, Target: {target_mm:.2f} mm")
+        return False
+
     # === Position ===
 
     def get_position(self) -> Optional['TelescopePosition']:

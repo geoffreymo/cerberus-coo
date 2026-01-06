@@ -266,19 +266,56 @@ class FocusAnalyzer:
                 error_message=str(e)
             )
 
+    def _get_focus_from_header(self, fits_path: str) -> Optional[float]:
+        """
+        Read focus position from FITS header.
+
+        Looks for FOCUS or TELFOCUS keywords.
+
+        Args:
+            fits_path: Path to FITS file
+
+        Returns:
+            Focus position in mm, or None if not found
+        """
+        from astropy.io import fits
+
+        try:
+            with fits.open(fits_path) as hdul:
+                # Check primary header first
+                header = hdul[0].header
+                if 'FOCUS' in header:
+                    return float(header['FOCUS'])
+                if 'TELFOCUS' in header:
+                    return float(header['TELFOCUS'])
+
+                # Check image extension if present
+                if len(hdul) > 1 and hasattr(hdul[1], 'header'):
+                    header = hdul[1].header
+                    if 'FOCUS' in header:
+                        return float(header['FOCUS'])
+                    if 'TELFOCUS' in header:
+                        return float(header['TELFOCUS'])
+
+        except Exception as e:
+            self.logger.warning(f"Could not read focus from {fits_path}: {e}")
+
+        return None
+
     def analyze_directory(self, directory: str,
-                          pattern: str = "focus_*_20*.fits",
-                          position_parser: Optional[callable] = None) -> FocusResult:
+                          pattern: str = "*focus*.fits",
+                          position_parser: Optional[callable] = None,
+                          use_headers: bool = True) -> FocusResult:
         """
         Analyze focus images from a directory.
-
-        This is a convenience method that mimics the original focus_loop.py behavior.
 
         Args:
             directory: Directory containing focus images
             pattern: Glob pattern to match focus images
             position_parser: Function to extract focus position from filename.
-                           If None, uses default parser expecting 'focus_[POS]_*.fits'
+                           If None and use_headers=False, expects 'focus_[POS]_*.fits'
+            use_headers: If True (default), read focus position from FITS headers
+                        instead of parsing filenames. More robust.
 
         Returns:
             FocusResult
@@ -296,19 +333,26 @@ class FocusAnalyzer:
                 error_message=f"No images found matching {pattern} in {directory}"
             )
 
-        # Default position parser: expects 'focus_[POS]_*.fits'
-        if position_parser is None:
-            def position_parser(path):
-                return float(path.stem.split('_')[1])
-
         # Build images dict
         image_dict = {}
         for img_path in sorted(images):
             try:
-                position = position_parser(img_path)
+                if use_headers:
+                    # Read focus position from FITS header (more robust)
+                    position = self._get_focus_from_header(str(img_path))
+                    if position is None:
+                        self.logger.warning(f"No focus in header for {img_path}, trying filename")
+                        # Fall back to filename parsing
+                        position = float(img_path.stem.split('_')[2])  # timestamp_focus_POS_filter.fits
+                elif position_parser is not None:
+                    position = position_parser(img_path)
+                else:
+                    # Default filename parser: expects '*_focus_[POS]_*.fits'
+                    position = float(img_path.stem.split('_')[2])
+
                 image_dict[position] = str(img_path)
             except (IndexError, ValueError) as e:
-                self.logger.warning(f"Could not parse position from {img_path}: {e}")
+                self.logger.warning(f"Could not get position for {img_path}: {e}")
                 continue
 
         self.logger.info(f"Found {len(image_dict)} focus images in {directory}")

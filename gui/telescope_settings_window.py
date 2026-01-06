@@ -155,7 +155,9 @@ class TelescopeSettingsWindow(tk.Toplevel):
         try:
             ra = float(self.offset_ra_var.get())
             dec = float(self.offset_dec_var.get())
-            self.api.move_offset(ra, dec)
+            success = self.api.move_offset(ra, dec)
+            if not success:
+                logger.error(f"TCS rejected offset move command: RA={ra}, Dec={dec}")
         except ValueError:
             pass
         except Exception as e:

@@ -89,9 +89,21 @@ class MockTelescope:
     def __init__(self, initial_focus: float = 37.5):
         self.focus_mm = initial_focus
 
-    def set_focus(self, position: float):
+    def set_focus(self, position: float) -> bool:
+        """Simulate focus move. Returns True on success (like real TCS)."""
         logger.info(f"[SIM] Moving focus: {self.focus_mm:.2f} -> {position:.2f} mm")
         self.focus_mm = position
+        return True  # Simulate successful TCS response
+
+    def get_focus(self) -> float:
+        """Get current focus position."""
+        return self.focus_mm
+
+    def wait_for_focus(self, target_mm: float, tolerance_mm: float = 0.1,
+                       timeout_sec: float = 60.0, poll_interval: float = 0.5) -> bool:
+        """Simulate waiting for focus (instant in simulation)."""
+        logger.info(f"[SIM] Focus at target: {self.focus_mm:.2f} mm")
+        return True
 
     def get_status(self) -> MockTelescopeStatus:
         return MockTelescopeStatus(focus_mm=self.focus_mm)
@@ -628,12 +640,13 @@ class FocusWindow(tk.Toplevel):
 
         try:
             focus = float(self.focus_goto_var.get())
-            self.api.set_focus(focus)
+            success = self.api.set_focus(focus)
+            if not success:
+                logger.error(f"TCS rejected focus command: {focus} mm")
         except ValueError:
             pass
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Failed to set focus: {e}")
+            logger.error(f"Failed to set focus: {e}")
 
     def _on_focus_offset(self, direction: int):
         """Handle focus offset button click."""
@@ -642,12 +655,13 @@ class FocusWindow(tk.Toplevel):
 
         try:
             offset = float(self.focus_offset_var.get()) * direction
-            self.api.offset_focus(offset)
+            success = self.api.offset_focus(offset)
+            if not success:
+                logger.error(f"TCS rejected focus offset command: {offset:+.2f} mm")
         except ValueError:
             pass
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Failed to offset focus: {e}")
+            logger.error(f"Failed to offset focus: {e}")
 
     def update_from_state(self, state):
         """Update window from system state."""
