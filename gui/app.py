@@ -38,14 +38,16 @@ class CerberusGUI:
         gui.run()
     """
 
-    def __init__(self, title: str = "Cerberus High-Speed Imager"):
+    def __init__(self, title: str = "Cerberus High-Speed Imager", enable_simulation: bool = False):
         """
         Initialize the GUI.
 
         Args:
             title: Window title
+            enable_simulation: Enable simulation mode in focus window
         """
         self.title = title
+        self.enable_simulation = enable_simulation
 
         # Create API
         self.api = CerberusAPI()
@@ -221,7 +223,7 @@ class CerberusGUI:
             return
 
         # Create new focus window
-        self._focus_window = FocusWindow(self.root, self.api)
+        self._focus_window = FocusWindow(self.root, self.api, enable_simulation=self.enable_simulation)
         self._focus_window.update_from_state(self.api.state)
 
     def _open_camera_settings_window(self):
@@ -342,6 +344,13 @@ class CerberusGUI:
 
 def main():
     """Main entry point for the GUI."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Cerberus High-Speed Imager GUI")
+    parser.add_argument('--sim', '--simulate', action='store_true',
+                        help='Enable simulation mode for focus loop testing')
+    args = parser.parse_args()
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
@@ -349,7 +358,7 @@ def main():
     )
 
     # Create and run GUI
-    gui = CerberusGUI()
+    gui = CerberusGUI(enable_simulation=args.sim)
     gui.run()
 
 

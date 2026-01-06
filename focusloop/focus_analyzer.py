@@ -348,7 +348,7 @@ class FocusAnalyzer:
 
             # Mark best focus
             plt.axvline(result.best_focus, color='green', linestyle='--',
-                       label=f'Best Focus = {result.best_focus:.2f}')
+                       label=f'Best Focus = {result.best_focus:.2f} mm, FWHM = {result.best_fwhm_arcsec:.3f}"')
             plt.scatter([result.best_focus], [result.best_fwhm_arcsec],
                        color='green', s=100, zorder=6, marker='*')
 
