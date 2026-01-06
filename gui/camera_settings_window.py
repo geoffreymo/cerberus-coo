@@ -23,8 +23,8 @@ class CameraSettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.api = api
         self.title("Camera Settings")
-        self.geometry("500x600")
-        self.minsize(400, 400)
+        self.geometry("550x700")
+        self.minsize(500, 600)
 
         # Variables for settings
         self.binning_var = tk.StringVar(value="1x1")

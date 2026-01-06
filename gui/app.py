@@ -143,17 +143,13 @@ class CerberusGUI:
         left_frame = ttk.Frame(main_frame)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
-        # Camera controls (includes save and filter selection)
-        self.camera_panel = CameraControlsPanel(left_frame, self.api)
-        self.camera_panel.pack(fill=tk.X, pady=(0, 5))
+        # Status bar at bottom of left pane (pack first with side=BOTTOM)
+        self.status_bar = StatusBar(left_frame, self.api)
+        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
-        # Subarray controls
-        self.subarray_panel = SubarrayPanel(left_frame, self.api)
-        self.subarray_panel.pack(fill=tk.X, pady=(0, 5))
-
-        # Settings buttons frame
+        # Settings buttons frame (anchored above status bar)
         buttons_frame = ttk.Frame(left_frame)
-        buttons_frame.pack(fill=tk.X, pady=(0, 5))
+        buttons_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(5, 5))
 
         ttk.Button(
             buttons_frame, text="Camera Settings", command=self._open_camera_settings_window
@@ -167,17 +163,20 @@ class CerberusGUI:
             buttons_frame, text="Focus Settings", command=self._open_focus_window
         ).pack(fill=tk.X, padx=5, pady=2)
 
-        # Right side - Display
-        right_frame = ttk.Frame(main_frame)
-        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # Camera controls (includes save and filter selection)
+        self.camera_panel = CameraControlsPanel(left_frame, self.api)
+        self.camera_panel.pack(fill=tk.X, pady=(0, 5))
 
-        # Image display
-        self.display_panel = ImageDisplayPanel(right_frame, self.api)
-        self.display_panel.pack(fill=tk.BOTH, expand=True)
+        # Subarray controls
+        self.subarray_panel = SubarrayPanel(left_frame, self.api)
+        self.subarray_panel.pack(fill=tk.X, pady=(0, 5))
 
-        # Status bar at bottom
-        self.status_bar = StatusBar(self.root, self.api)
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        # Live view controls (above buttons)
+        self.display_panel = ImageDisplayPanel(left_frame, self.api)
+        self.display_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Connect camera panel to display panel for auto-open on start
+        self.camera_panel.set_display_panel(self.display_panel)
 
     def _on_status_change(self, state):
         """Handle status change from API."""

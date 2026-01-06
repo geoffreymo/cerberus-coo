@@ -24,8 +24,8 @@ class TelescopeSettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.api = api
         self.title("Telescope Settings")
-        self.geometry("400x450")
-        self.minsize(350, 400)
+        self.geometry("500x500")
+        self.minsize(450, 450)
 
         # Variables
         self.ra_var = tk.StringVar(value="--")

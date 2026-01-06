@@ -20,6 +20,7 @@ class CameraControlsPanel(ttk.LabelFrame):
     def __init__(self, parent, api: 'CerberusAPI'):
         super().__init__(parent, text="Camera Controls", padding=5)
         self.api = api
+        self._display_panel = None  # Reference to display panel for auto-open
 
         # Variables - Basic
         self.target_var = tk.StringVar(value="Object")
@@ -54,6 +55,10 @@ class CameraControlsPanel(ttk.LabelFrame):
         self.frames_dropped_var = tk.StringVar(value="0")
 
         self._create_widgets()
+
+    def set_display_panel(self, display_panel):
+        """Set reference to display panel for auto-open on stream start."""
+        self._display_panel = display_panel
 
     def _create_widgets(self):
         """Create panel widgets."""
@@ -293,6 +298,10 @@ class CameraControlsPanel(ttk.LabelFrame):
 
                 # Start streaming timer
                 self._start_stream_timer()
+
+                # Auto-open display window next to main window
+                if self._display_panel:
+                    self._display_panel.open_display_next_to_window()
 
                 # Set up take images mode if N > 0
                 if n_images > 0:

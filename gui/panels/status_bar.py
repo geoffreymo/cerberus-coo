@@ -29,63 +29,49 @@ class StatusBar(ttk.Frame):
         self._create_widgets()
 
     def _create_widgets(self):
-        """Create status bar widgets."""
-        # Camera status
+        """Create status bar widgets in 2 columns x 3 rows."""
+        # Configure grid columns
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+
+        # Row 0: Camera | Temp
         self.camera_label = ttk.Label(
             self, textvariable=self.camera_status_var,
             relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
         )
-        self.camera_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.camera_label.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=1)
 
-        # Separator
-        ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=2)
+        self.temp_label = ttk.Label(
+            self, textvariable=self.temperature_var,
+            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
+        )
+        self.temp_label.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=1)
 
-        # Telescope status
+        # Row 1: TCS | FPS
         self.telescope_label = ttk.Label(
             self, textvariable=self.telescope_status_var,
             relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
         )
-        self.telescope_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.telescope_label.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=1)
 
-        # Separator
-        ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=2)
+        self.fps_label = ttk.Label(
+            self, textvariable=self.fps_var,
+            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
+        )
+        self.fps_label.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=1)
 
-        # Filter status
+        # Row 2: Filter | Frames
         self.filter_label = ttk.Label(
             self, textvariable=self.filterwheel_status_var,
             relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
         )
-        self.filter_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.filter_label.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=1)
 
-        # Separator
-        ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=2)
-
-        # Temperature
-        self.temp_label = ttk.Label(
-            self, textvariable=self.temperature_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2), width=15
-        )
-        self.temp_label.pack(side=tk.LEFT)
-
-        # Separator
-        ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=2)
-
-        # FPS
-        self.fps_label = ttk.Label(
-            self, textvariable=self.fps_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2), width=12
-        )
-        self.fps_label.pack(side=tk.LEFT)
-
-        # Separator
-        ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=2)
-
-        # Frames
         self.frames_label = ttk.Label(
             self, textvariable=self.frames_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2), width=15
+            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
         )
-        self.frames_label.pack(side=tk.LEFT)
+        self.frames_label.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=1)
 
     def update_from_state(self, state):
         """Update status bar from system state."""
