@@ -45,7 +45,7 @@ class CameraControlsPanel(ttk.LabelFrame):
         # Variables - Save
         self.save_var = tk.BooleanVar(value=False)
         self.output_dir_var = tk.StringVar(value="/data/cerberus")
-        self.frames_per_cube_var = tk.StringVar(value="1000")
+        self.frames_per_cube_var = tk.StringVar(value="100")
 
         # Stats
         self.frames_captured_var = tk.StringVar(value="0")
@@ -116,10 +116,21 @@ class CameraControlsPanel(ttk.LabelFrame):
         self.exposure_unit_combo.pack(side=tk.LEFT, padx=2)
         self.exposure_unit_combo.bind("<<ComboboxSelected>>", self._on_unit_change)
 
-        ttk.Label(row3_frame, text="N Frames:").pack(side=tk.LEFT, padx=(10, 0))
+        # N Frames with hint text
+        nframes_container = ttk.Frame(row3_frame)
+        nframes_container.pack(side=tk.LEFT, padx=(10, 0))
+
+        nframes_row = ttk.Frame(nframes_container)
+        nframes_row.pack()
+        ttk.Label(nframes_row, text="N Frames:").pack(side=tk.LEFT)
         ttk.Entry(
-            row3_frame, textvariable=self.n_images_var, width=8
+            nframes_row, textvariable=self.n_images_var, width=8
         ).pack(side=tk.LEFT, padx=5)
+
+        # Hint text
+        hint_label = ttk.Label(nframes_container, text="(Leave empty for continuous stream)",
+                              font=('TkDefaultFont', 9))
+        hint_label.pack()
 
         # Row 4: Readout | Save checkbox | Start button
         row4_frame = ttk.Frame(self)
@@ -139,8 +150,9 @@ class CameraControlsPanel(ttk.LabelFrame):
         )
         self.save_checkbox.pack(side=tk.LEFT, padx=10)
 
-        self.start_stop_btn = ttk.Button(
-            row4_frame, text="Start", command=self._on_start_stop, state=tk.DISABLED
+        self.start_stop_btn = tk.Button(
+            row4_frame, text="Start", command=self._on_start_stop, state=tk.DISABLED,
+            bg="#4CAF50", fg="white", activebackground="#45a049", width=8
         )
         self.start_stop_btn.pack(side=tk.LEFT, padx=5)
 
@@ -253,7 +265,7 @@ class CameraControlsPanel(ttk.LabelFrame):
             # Currently streaming - STOP
             # Stop camera first to prevent new frames
             self.api.stop_streaming()
-            self.start_stop_btn.config(text="Start")
+            self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
 
             # Stop streaming timer
             self._stop_stream_timer()
@@ -277,7 +289,7 @@ class CameraControlsPanel(ttk.LabelFrame):
                 n_images = 0
 
             if self.api.start_streaming():
-                self.start_stop_btn.config(text="Stop")
+                self.start_stop_btn.config(text="Stop", bg="#f44336", activebackground="#da190b")
 
                 # Start streaming timer
                 self._start_stream_timer()
@@ -400,7 +412,7 @@ class CameraControlsPanel(ttk.LabelFrame):
         try:
             frames_per_cube = int(self.frames_per_cube_var.get())
         except ValueError:
-            frames_per_cube = 1000
+            frames_per_cube = 100
 
         object_name = self.target_var.get()
         output_dir = self.output_dir_var.get()
@@ -482,7 +494,7 @@ class CameraControlsPanel(ttk.LabelFrame):
                 # Auto-stop streaming
                 if self.api.state.camera_streaming:
                     self.api.stop_streaming()
-                    self.start_stop_btn.config(text="Start")
+                    self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
                     self._stop_stream_timer()
 
     def update_from_state(self, state):
@@ -493,26 +505,30 @@ class CameraControlsPanel(ttk.LabelFrame):
             self.status_label.config(text="Connected", foreground="green")
             self.start_stop_btn.config(state=tk.NORMAL)
 
-            # Update button text based on streaming state
+            # Update button text and color based on streaming state
             if state.camera_streaming:
-                self.start_stop_btn.config(text="Stop")
+                self.start_stop_btn.config(text="Stop", bg="#f44336", activebackground="#da190b")
             else:
-                self.start_stop_btn.config(text="Start")
+                self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
         else:
             self.connect_btn.config(text="Connect")
             self.status_label.config(text="Disconnected", foreground="black")
             self.start_stop_btn.config(state=tk.DISABLED)
 
         # Update filter combo if filterwheel connected
-        if state.filterwheel_connected and state.available_filters:
-            if self.filter_combo['values'] != tuple(state.available_filters):
-                self.filter_combo['values'] = state.available_filters
-            # Update current filter selection
-            if state.current_filter and state.current_filter != self.filter_var.get():
-                self.filter_var.set(state.current_filter)
-        else:
-            self.filter_combo['values'] = []
-            self.filter_var.set("")
+        # Wrapped in try/except to avoid 'popdown' error when combo is open
+        try:
+            if state.filterwheel_connected and state.available_filters:
+                if self.filter_combo['values'] != tuple(state.available_filters):
+                    self.filter_combo['values'] = state.available_filters
+                # Update current filter selection
+                if state.current_filter and state.current_filter != self.filter_var.get():
+                    self.filter_var.set(state.current_filter)
+            else:
+                self.filter_combo['values'] = []
+                self.filter_var.set("")
+        except tk.TclError:
+            pass  # Ignore errors when combobox is open
 
         # Update frames captured display
         self.frames_captured_var.set(str(state.camera_frames_captured))

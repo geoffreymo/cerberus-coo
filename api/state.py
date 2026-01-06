@@ -31,6 +31,7 @@ class SystemState:
     camera_temperature: Optional[float] = None
     camera_frame_rate: Optional[float] = None
     camera_frames_captured: int = 0
+    camera_params: Dict[str, Any] = field(default_factory=dict)
 
     # Telescope state
     telescope_connected: bool = False

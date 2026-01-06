@@ -219,5 +219,76 @@ class CameraSettingsPanel(ttk.LabelFrame):
 
     def update_from_state(self, state):
         """Update panel from system state."""
-        # This could be extended to read current values from camera
-        pass
+        if not state.camera_connected or not state.camera_params:
+            return
+
+        try:
+            self._do_update_from_state(state)
+        except tk.TclError:
+            pass  # Ignore 'popdown' errors when combobox dropdown is open
+
+    def _do_update_from_state(self, state):
+        """Internal update - may raise TclError if combobox is open."""
+        params = state.camera_params
+
+        # Update binning
+        binning_val = params.get('BINNING')
+        if binning_val:
+            binning_map = {1: "1x1", 2: "2x2", 4: "4x4", "1x1": "1x1", "2x2": "2x2", "4x4": "4x4"}
+            if binning_val in binning_map:
+                self.binning_var.set(binning_map[binning_val])
+
+        # Update readout speed
+        readout_val = params.get('READOUT SPEED')
+        if readout_val:
+            if 'ULTRA QUIET' in str(readout_val).upper():
+                self.readout_speed_var.set("Ultra Quiet")
+            elif 'STANDARD' in str(readout_val).upper():
+                self.readout_speed_var.set("Standard")
+
+        # Update sensor mode
+        sensor_val = params.get('SENSOR MODE')
+        if sensor_val:
+            if 'PHOTON' in str(sensor_val).upper():
+                self.sensor_mode_var.set("Photon Number")
+            else:
+                self.sensor_mode_var.set("Standard")
+
+        # Update trigger source
+        trigger_source = params.get('TRIGGER SOURCE')
+        if trigger_source:
+            source_str = str(trigger_source).upper()
+            if 'EXTERNAL' in source_str:
+                self.trigger_source_var.set("External")
+            elif 'SOFTWARE' in source_str:
+                self.trigger_source_var.set("Software")
+            else:
+                self.trigger_source_var.set("Internal")
+
+        # Update trigger mode
+        trigger_mode = params.get('TRIGGER MODE')
+        if trigger_mode:
+            mode_str = str(trigger_mode).upper()
+            if 'START' in mode_str:
+                self.trigger_mode_var.set("Start")
+            else:
+                self.trigger_mode_var.set("Normal")
+
+        # Update defect correction
+        defect_val = params.get('DEFECT CORRECT MODE')
+        if defect_val:
+            if str(defect_val).upper() == 'ON' or defect_val == 2.0:
+                self.defect_correct_var.set("ON")
+            else:
+                self.defect_correct_var.set("OFF")
+
+        # Update hot pixel level
+        hot_pixel_val = params.get('HOT PIXEL CORRECT LEVEL')
+        if hot_pixel_val:
+            hp_str = str(hot_pixel_val).upper()
+            if 'AGGRESSIVE' in hp_str:
+                self.hot_pixel_var.set("AGGRESSIVE")
+            elif 'MINIMUM' in hp_str:
+                self.hot_pixel_var.set("MINIMUM")
+            else:
+                self.hot_pixel_var.set("STANDARD")

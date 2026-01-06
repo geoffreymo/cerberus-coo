@@ -1,10 +1,16 @@
 # gui/app.py
 """Main Cerberus GUI application."""
 
+import os
 import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Optional
+
+# Limit NumPy threading to reduce CPU usage during display (like v18 GUI)
+os.environ['OMP_NUM_THREADS'] = '4'
+os.environ['MKL_NUM_THREADS'] = '4'
+os.environ['NUMEXPR_NUM_THREADS'] = '4'
 
 from ..api import CerberusAPI
 from .panels import (
@@ -13,7 +19,6 @@ from .panels import (
     SubarrayPanel,
     ImageDisplayPanel,
     TelescopePanel,
-    FilterPanel,
     StatusBar,
 )
 from .focus_window import FocusWindow
@@ -136,13 +141,9 @@ class CerberusGUI:
         col1_frame = ttk.Frame(controls_frame)
         col1_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
-        # Camera controls (includes save)
+        # Camera controls (includes save and filter selection)
         self.camera_panel = CameraControlsPanel(col1_frame, self.api)
         self.camera_panel.pack(fill=tk.X, pady=(0, 5))
-
-        # Filter panel
-        self.filter_panel = FilterPanel(col1_frame, self.api)
-        self.filter_panel.pack(fill=tk.X, pady=(0, 5))
 
         # Telescope panel
         self.telescope_panel = TelescopePanel(col1_frame, self.api)
@@ -164,7 +165,7 @@ class CerberusGUI:
         focus_btn_frame = ttk.Frame(col2_frame)
         focus_btn_frame.pack(fill=tk.X, pady=(0, 5))
         ttk.Button(
-            focus_btn_frame, text="Open Focus Loop...", command=self._open_focus_window
+            focus_btn_frame, text="Open Focus", command=self._open_focus_window
         ).pack(fill=tk.X, padx=5, pady=5)
 
         # Right column - Display
@@ -195,7 +196,6 @@ class CerberusGUI:
             self.settings_panel.update_from_state(state)
             self.subarray_panel.update_from_state(state)
             self.telescope_panel.update_from_state(state)
-            self.filter_panel.update_from_state(state)
             self.status_bar.update_from_state(state)
 
             # Update focus window if it's open

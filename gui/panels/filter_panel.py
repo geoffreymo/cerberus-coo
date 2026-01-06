@@ -122,13 +122,16 @@ class FilterPanel(ttk.LabelFrame):
 
     def update_from_state(self, state):
         """Update panel from system state."""
-        if state.filterwheel_connected:
-            self.connect_btn.config(text="Disconnect")
-            self.status_label.config(text="Connected", foreground="green")
-            if state.available_filters:
-                self.filter_combo['values'] = state.available_filters
-        else:
-            self.connect_btn.config(text="Connect")
-            self.status_label.config(text="Disconnected", foreground="black")
+        try:
+            if state.filterwheel_connected:
+                self.connect_btn.config(text="Disconnect")
+                self.status_label.config(text="Connected", foreground="green")
+                if state.available_filters:
+                    self.filter_combo['values'] = state.available_filters
+            else:
+                self.connect_btn.config(text="Connect")
+                self.status_label.config(text="Disconnected", foreground="black")
 
-        self.current_filter_var.set(state.current_filter or "--")
+            self.current_filter_var.set(state.current_filter or "--")
+        except tk.TclError:
+            pass  # Ignore 'popdown' errors when combobox dropdown is open

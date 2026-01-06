@@ -74,7 +74,7 @@ class CerberusAPI:
 
     def __init__(self):
         """Initialize the Cerberus API."""
-        # Save queue for v18 architecture (ProcessPoolExecutor)
+        # Save queue and thread for ProcessPoolExecutor architecture
         self.save_queue: Optional[queue.Queue] = None
         self.save_thread: Optional[OptimizedSaveThread] = None
 
@@ -83,7 +83,7 @@ class CerberusAPI:
         self.telescope = TelescopeController()
         self.filterwheel: Optional['FilterWheel'] = None
 
-        # Keep old writer for backwards compatibility (unused in v18 architecture)
+        # Keep old writer for backwards compatibility (unused)
         self.writer = FITSWriter()
 
         # System state
@@ -231,16 +231,20 @@ class CerberusAPI:
         """Stop camera streaming."""
         logger.info("Stopping streaming...")
 
-        # Stop saving first if active
-        if self._state.is_saving:
-            self.stop_saving()
-
+        # Stop camera FIRST
         success = self.camera.stop_streaming()
 
         with self._state_lock:
             self._state.camera_streaming = False
 
         self._notify_status_change()
+
+        # Then stop saving (after brief pause to allow in-flight frames to be saved)
+        if self._state.is_saving:
+            import time
+            time.sleep(0.2)  # 200ms like v18 GUI
+            self.stop_saving()
+
         return success
 
     def is_streaming(self) -> bool:
@@ -267,7 +271,7 @@ class CerberusAPI:
         self,
         object_name: str,
         output_dir: str,
-        frames_per_cube: int = 1000,
+        frames_per_cube: int = 100,
         comment: str = ""
     ) -> bool:
         """
@@ -305,14 +309,25 @@ class CerberusAPI:
         date_str = datetime.now().strftime('%Y_%m_%d')
         save_folder = os.path.join(output_dir, f"captures_{date_str}")
 
-        # Create and start save thread (v18 architecture with ProcessPoolExecutor)
+        # Create filter callback
+        def get_current_filter():
+            """Get current filter name for FITS header"""
+            if self.filterwheel and self._state.filterwheel_connected:
+                try:
+                    return self.filterwheel.filter
+                except:
+                    return None
+            return None
+
+        # Create and start save thread with ProcessPoolExecutor
         self.save_thread = OptimizedSaveThread(
             save_queue=self.save_queue,
             output_dir=save_folder,
             object_name=object_name,
             header_dict=header_dict,
             frames_per_cube=frames_per_cube,
-            camera_params=self.camera.get_all_params()
+            camera_params=self.camera.get_all_params(),
+            filter_callback=get_current_filter
         )
         self.save_thread.start()
 
@@ -338,7 +353,7 @@ class CerberusAPI:
         # Remove save queue from camera
         self.camera.save_queue = None
 
-        # Stop and join save thread (v18 architecture)
+        # Stop and join save thread
         if self.save_thread and self.save_thread.is_alive():
             self.save_thread.stop()
             self.save_thread.join(timeout=60)  # Wait up to 60s for writes to complete
@@ -964,10 +979,14 @@ class CerberusAPI:
             is_saving = self._state.is_saving
 
         # Read hardware (no lock held - allows concurrent operations)
+        camera_fps = None
+        camera_params = {}
         try:
             if camera_connected:
                 camera_exposure = self.camera.get_exposure()
                 camera_temp = self.camera.get_property('SENSOR_TEMPERATURE')
+                camera_fps = self.camera.get_frame_rate()
+                camera_params = self.camera.get_all_params()
 
             if telescope_connected:
                 telescope_focus = self.telescope.get_focus()
@@ -990,6 +1009,10 @@ class CerberusAPI:
                 self._state.camera_exposure = camera_exposure
                 if camera_temp:
                     self._state.camera_temperature = camera_temp
+                if camera_fps is not None:
+                    self._state.camera_frame_rate = camera_fps
+                if camera_params:
+                    self._state.camera_params = camera_params
 
             if telescope_connected:
                 self._state.telescope_focus = telescope_focus
@@ -1101,7 +1124,7 @@ class CerberusAPI:
         if frames_captured % 100 == 1:
             logger.info(f"API received frame {frames_captured}, is_saving={is_saving}")
 
-        # Note: Frames are sent to save_queue directly by camera controller (v18 architecture)
+        # Note: Frames are sent to save_queue directly by camera controller
         # No need to forward to writer here
 
         # Update display queue (keep only latest)

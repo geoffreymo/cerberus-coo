@@ -24,7 +24,7 @@ class OutputControlsPanel(ttk.LabelFrame):
         # Variables
         self.object_name_var = tk.StringVar(value="Object")
         self.output_dir_var = tk.StringVar(value=os.getcwd())
-        self.frames_per_cube_var = tk.StringVar(value="1000")
+        self.frames_per_cube_var = tk.StringVar(value="100")
         self.is_saving_var = tk.BooleanVar(value=False)
 
         # Stats
@@ -119,7 +119,7 @@ class OutputControlsPanel(ttk.LabelFrame):
             try:
                 frames_per_cube = int(self.frames_per_cube_var.get())
             except ValueError:
-                frames_per_cube = 1000
+                frames_per_cube = 100
 
             success = self.api.start_saving(
                 object_name=self.object_name_var.get(),

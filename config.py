@@ -72,7 +72,7 @@ class AcquisitionConfig:
     """Acquisition/writer configuration."""
     max_queue_size: int = 10000
     max_pending_writes: int = 6
-    frames_per_cube: int = 1000
+    frames_per_cube: int = 100
     thread_pool_workers: int = 8
     backpressure_threshold: float = 0.9
 

@@ -5,8 +5,8 @@ import tkinter as tk
 from tkinter import ttk
 import numpy as np
 from typing import TYPE_CHECKING, Optional
-import threading
 import time
+import threading
 
 try:
     import cv2
@@ -33,9 +33,10 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         # Display state
         self._window_name = "Cerberus Live View"
-        self._display_thread: Optional[threading.Thread] = None
         self._running = False
         self._last_frame: Optional[np.ndarray] = None
+        self._window_created = False
+        self._display_lock = threading.Lock()  # Prevent display update pileup
 
         # Scaling
         self.scale_min_var = tk.StringVar(value="0")
@@ -103,77 +104,92 @@ class ImageDisplayPanel(ttk.LabelFrame):
             self._start_display()
 
     def _start_display(self):
-        """Start the display thread."""
+        """Start the display loop (runs in MAIN THREAD via self.after to avoid Qt deadlocks)."""
         if not CV2_AVAILABLE:
             return
 
         self._running = True
-        self._display_thread = threading.Thread(
-            target=self._display_loop,
-            name="DisplayThread",
-            daemon=True
-        )
-        self._display_thread.start()
         self.display_btn.config(text="Close Display")
 
-    def _stop_display(self):
-        """Stop the display thread."""
-        self._running = False
-        if self._display_thread is not None:
-            self._display_thread.join(timeout=1.0)
-            self._display_thread = None
+        # Start display loop in main thread (avoids Qt deadlock)
+        self.after(20, self._display_loop)
 
-        if CV2_AVAILABLE:
+    def _stop_display(self):
+        """Stop the display loop."""
+        self._running = False
+
+        if CV2_AVAILABLE and self._window_created:
             try:
                 cv2.destroyWindow(self._window_name)
+                self._window_created = False
             except:
                 pass
 
         self.display_btn.config(text="Open Display")
 
     def _display_loop(self):
-        """Display loop (runs in separate thread)."""
-        cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self._window_name, *self.display_size)
+        """Display loop (runs in MAIN THREAD via self.after to avoid Qt deadlocks)."""
+        if not self._running:
+            return
 
-        while self._running:
-            try:
-                # Get frame from API
-                frame = self.api.get_display_frame(timeout=0.05)
-
-                if frame is not None:
-                    self._last_frame = frame
-                    self._update_stats(frame)
-
-                    # Scale frame for display
-                    display_frame = self._scale_frame(frame)
-
-                    # Show frame
-                    cv2.imshow(self._window_name, display_frame)
-
-                # Handle OpenCV events
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q') or key == 27:  # q or ESC
-                    self._running = False
-                    break
-
-            except Exception as e:
-                time.sleep(0.01)
+        # CRITICAL: Non-blocking lock prevents display update pileup
+        # If previous update still processing, skip this frame (like v18 GUI)
+        if not self._display_lock.acquire(blocking=False):
+            # Schedule next update and return immediately
+            if self._running:
+                self.after(50, self._display_loop)  # Longer delay if skipping
+            return
 
         try:
-            cv2.destroyWindow(self._window_name)
-        except:
-            pass
+            # Create window on first call (in main thread - no Qt deadlock!)
+            if not self._window_created:
+                cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(self._window_name, *self.display_size)
+                self._window_created = True
 
-        # Update button in main thread
-        self.after(0, lambda: self.display_btn.config(text="Open Display"))
+            # Get latest frame from API - just grab ONE frame, don't drain
+            frame = None
+            try:
+                frame = self.api.get_display_frame(timeout=0.001)
+            except:
+                pass
+
+            # Display frame if we got one
+            if frame is not None:
+                self._last_frame = frame
+                self._update_stats(frame)
+
+                # Scale frame for display
+                display_frame = self._scale_frame(frame)
+
+                # Show frame (running in main thread - no deadlock!)
+                cv2.imshow(self._window_name, display_frame)
+
+            # Handle OpenCV events
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q') or key == 27:  # q or ESC
+                self._stop_display()
+                return
+
+        except Exception as e:
+            pass
+        finally:
+            self._display_lock.release()
+
+        # Schedule next update (~50 Hz like v18 GUI)
+        if self._running:
+            self.after(50, self._display_loop)
 
     def _scale_frame(self, frame: np.ndarray) -> np.ndarray:
         """Scale frame for display."""
         if self.auto_scale_var.get():
-            # Auto scale based on percentiles
-            p1, p99 = np.percentile(frame, [1, 99])
-            vmin, vmax = p1, p99
+            # Auto scale using min/max
+            # CRITICAL OPTIMIZATION: Downsample for min/max calculation to reduce CPU
+            # Computing min/max on full 2304x4096 array uses all CPU cores!
+            # Sample every 8th pixel in each dimension (64x reduction)
+            sample = frame[::8, ::8]
+            vmin = int(np.min(sample))
+            vmax = int(np.max(sample))
         else:
             try:
                 vmin = float(self.scale_min_var.get())
@@ -182,7 +198,8 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 vmin, vmax = 0, 65535
 
         # Clip and normalize
-        vmax = max(vmax, vmin + 1)
+        if vmax <= vmin:
+            vmax = vmin + 1
         scaled = np.clip(frame, vmin, vmax)
         scaled = ((scaled - vmin) / (vmax - vmin) * 255).astype(np.uint8)
 
@@ -201,10 +218,12 @@ class ImageDisplayPanel(ttk.LabelFrame):
             self._frame_count = 0
             self._fps_time = now
 
-        # Update stats (throttled)
+        # Update stats (throttled and downsampled)
         if self._frame_count % 10 == 0:
-            mean_val = np.mean(frame)
-            max_val = np.max(frame)
+            # Downsample for stats to reduce CPU usage
+            sample = frame[::8, ::8]
+            mean_val = np.mean(sample)
+            max_val = np.max(sample)
             self.mean_var.set(f"{mean_val:.0f}")
             self.max_var.set(f"{max_val}")
 
@@ -215,3 +234,10 @@ class ImageDisplayPanel(ttk.LabelFrame):
     def cleanup(self):
         """Cleanup resources."""
         self._stop_display()
+        # Clean up all OpenCV windows to avoid Qt warnings
+        if CV2_AVAILABLE:
+            try:
+                cv2.destroyAllWindows()
+                cv2.waitKey(1)  # Process any pending events
+            except:
+                pass

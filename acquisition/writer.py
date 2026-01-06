@@ -39,7 +39,7 @@ class FITSWriter:
         writer.configure(
             output_dir="/data/tonight",
             object_name="M31",
-            frames_per_cube=1000
+            frames_per_cube=100
         )
         writer.start()
 
@@ -69,7 +69,7 @@ class FITSWriter:
         else:
             max_queue_size = max_queue_size or 10000
             max_pending_writes = max_pending_writes or 6
-            self._frames_per_cube = 1000
+            self._frames_per_cube = 100
             self._thread_pool_workers = 8
             self._backpressure_threshold = 0.9
 
@@ -127,7 +127,7 @@ class FITSWriter:
         self,
         output_dir: str,
         object_name: str,
-        frames_per_cube: int = 1000,
+        frames_per_cube: int = 100,
         timing_info: Optional[Dict[str, Any]] = None,
         comment: str = ""
     ):

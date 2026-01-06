@@ -1,9 +1,13 @@
 """
 Cerberus Camera Module
 
-Minimal camera interface for automated observations.
+Provides camera interface for automated observations.
+Now consolidated - uses the main CameraController from hardware.camera.
 """
 
-from .exposure import CerberusCamera
+from ..hardware.camera.controller import CameraController
 
-__all__ = ['CerberusCamera']
+# Alias for backwards compatibility with focus loop and scripts
+CerberusCamera = CameraController
+
+__all__ = ['CerberusCamera', 'CameraController']
