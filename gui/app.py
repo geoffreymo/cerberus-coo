@@ -202,9 +202,11 @@ class CerberusGUI:
             if hasattr(self, '_focus_window') and self._focus_window and self._focus_window.winfo_exists():
                 self._focus_window.update_from_state(state)
         except Exception as e:
-            # Ignore errors during shutdown
-            if not self._closing:
-                logger.error(f"Error updating panels: {e}")
+            # Ignore 'popdown' errors when combobox dropdowns are open
+            err_str = str(e).lower()
+            if 'popdown' not in err_str:
+                if not self._closing:
+                    logger.error(f"Error updating panels: {e}")
 
     def _open_focus_window(self):
         """Open the focus loop window."""
