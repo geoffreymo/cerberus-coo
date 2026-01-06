@@ -583,11 +583,16 @@ class CerberusAPI:
         Returns:
             True if successful
         """
+        previous_focus = self._state.telescope_focus
         success = self.telescope.set_focus(position_mm)
         if success:
             with self._state_lock:
                 self._state.telescope_focus = position_mm
             self._notify_status_change()
+            # Log focus change for operational record
+            logger.info(f"FOCUS CHANGE: {previous_focus:.2f} -> {position_mm:.2f} mm")
+        else:
+            logger.warning(f"FOCUS CHANGE FAILED: {previous_focus} -> {position_mm:.2f} mm")
         return success
 
     def offset_focus(self, offset_mm: float) -> bool:
@@ -600,12 +605,17 @@ class CerberusAPI:
         Returns:
             True if successful
         """
+        previous_focus = self._state.telescope_focus
         success = self.telescope.offset_focus(offset_mm)
         if success:
             focus = self.telescope.get_focus()
             with self._state_lock:
                 self._state.telescope_focus = focus
             self._notify_status_change()
+            # Log focus change for operational record
+            logger.info(f"FOCUS OFFSET: {previous_focus:.2f} + ({offset_mm:+.2f}) = {focus:.2f} mm")
+        else:
+            logger.warning(f"FOCUS OFFSET FAILED: {previous_focus} + ({offset_mm:+.2f}) mm")
         return success
 
     def get_focus(self) -> Optional[float]:
@@ -721,6 +731,9 @@ class CerberusAPI:
             with self._state_lock:
                 self._state.current_filter = name
 
+            # Log filter change for operational record
+            logger.info(f"FILTER CHANGE: {previous_filter} -> {name}")
+
             # Apply focus offset if requested and telescope is connected
             if apply_focus_offset and self._state.telescope_connected and previous_filter:
                 self._apply_filter_focus_offset(previous_filter, name)
@@ -729,7 +742,7 @@ class CerberusAPI:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to set filter: {e}")
+            logger.error(f"FILTER CHANGE FAILED: {self._state.current_filter} -> {name}: {e}")
             return False
 
     def _apply_filter_focus_offset(self, from_filter: str, to_filter: str):

@@ -359,19 +359,19 @@ class FocusAnalyzer:
 
         return self.analyze_focus_sequence(image_dict)
 
-    def plot_focus_curve(self, result: FocusResult, output_path: Optional[str] = None,
-                          show: bool = False) -> Optional[str]:
+    def plot_focus_curve(self, result: FocusResult, output_path: Optional[str] = None) -> Optional[str]:
         """
         Plot the focus curve with parabolic fit.
 
         Args:
             result: FocusResult from analyze_focus_sequence
             output_path: Path to save plot (None to auto-generate)
-            show: Whether to display plot interactively
 
         Returns:
             Path to saved plot, or None if not saved
         """
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend for saving plots
         import matplotlib.pyplot as plt
 
         if not result.measurements:
@@ -407,9 +407,6 @@ class FocusAnalyzer:
             plt.savefig(output_path, dpi=150)
             self.logger.info(f"Saved plot to {output_path}")
 
-        if show:
-            plt.show()
-        else:
-            plt.close()
+        plt.close()
 
         return output_path

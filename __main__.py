@@ -21,6 +21,7 @@ def main():
         epilog="""
 Examples:
     python -m cerberus_coo              # Launch GUI
+    python -m cerberus_coo --sim        # Launch GUI with focus loop simulation mode
     python -m cerberus_coo --no-gui     # Print config and exit (for testing)
     python -m cerberus_coo --verbose    # Launch GUI with debug logging
         """
@@ -40,6 +41,11 @@ Examples:
         type=str,
         default=None,
         help='Path to config.json (uses default if not specified)'
+    )
+    parser.add_argument(
+        '--sim', '--simulate',
+        action='store_true',
+        help='Enable simulation mode for focus loop testing (simulates telescope/camera)'
     )
 
     args = parser.parse_args()
@@ -68,8 +74,9 @@ Examples:
         return 0
 
     # Launch GUI
-    from .gui import main as gui_main
-    gui_main()
+    from .gui.app import CerberusGUI
+    gui = CerberusGUI(enable_simulation=args.sim)
+    gui.run()
     return 0
 
 

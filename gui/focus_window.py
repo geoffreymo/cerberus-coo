@@ -547,7 +547,7 @@ class FocusWindow(tk.Toplevel):
                 auto_apply_best=False
             )
 
-            # Create mock hardware
+            # Create mock telescope and camera (simulated)
             mock_telescope = MockTelescope(initial_focus=optimal_focus)
             mock_camera = MockCamera(
                 image_size=(512, 512),
@@ -556,16 +556,19 @@ class FocusWindow(tk.Toplevel):
             )
             mock_camera.set_telescope(mock_telescope)
 
-            # Create mock filterwheel if filters specified
-            mock_filterwheel = None
-            if filters:
-                mock_filterwheel = MockFilterWheel(filters=filters)
+            # Use REAL filterwheel if connected (only telescope/camera are simulated)
+            real_filterwheel = None
+            if filters and self.api.state.filterwheel_connected:
+                real_filterwheel = self.api.filterwheel
+                logger.info(f"[SIM] Using REAL filterwheel for simulation")
+            elif filters:
+                logger.warning(f"[SIM] Filterwheel not connected - filter changes will be skipped")
 
-            # Create focus loop with mock hardware (no API - uses legacy camera path)
+            # Create focus loop with mock telescope/camera but real filterwheel
             focus_loop = FocusLoop(
                 camera=mock_camera,
                 telescope=mock_telescope,
-                filterwheel=mock_filterwheel,
+                filterwheel=real_filterwheel,
                 config=config
             )
 
