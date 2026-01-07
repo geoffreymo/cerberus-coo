@@ -370,8 +370,7 @@ class FocusLoop:
                 self.logger.info(f"Running focus loop for filter: {filter_name}")
 
                 try:
-                    self.filterwheel.goto(filter_name)
-                    self.filterwheel.wait_for_move()
+                    self.filterwheel.goto(filter_name)  # Already waits internally
                 except Exception as e:
                     self.logger.error(f"Filter wheel error: {e}")
                     self._results[filter_name] = FocusResult(

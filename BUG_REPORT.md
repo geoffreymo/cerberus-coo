@@ -58,16 +58,12 @@ Status updates read from `self.writer` (unused old object) instead of `self.save
 
 ---
 
-### 4. Double Wait for Filter Wheel
+### 4. ~~Double Wait for Filter Wheel~~ FIXED
 **File:** `focusloop/focus_sequence.py:373-374`
 
 `filterwheel.goto()` already waits, then `wait_for_move()` is called again.
 
-**Fix:** Remove the redundant `wait_for_move()` call:
-```python
-self.filterwheel.goto(filter_name)  # Already waits internally
-# Remove: self.filterwheel.wait_for_move()
-```
+**Fix applied:** Removed redundant `wait_for_move()` call.
 
 ---
 
