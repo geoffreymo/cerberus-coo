@@ -95,9 +95,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._photometry_enabled = False
         self._target_aperture: Optional[Tuple[int, int]] = None  # (x, y) image coords
         self._comparison_aperture: Optional[Tuple[int, int]] = None  # (x, y) image coords
-        self._aperture_radius = tk.IntVar(value=10)  # Aperture radius in pixels
-        self._annulus_inner = tk.IntVar(value=15)    # Inner annulus radius
-        self._annulus_outer = tk.IntVar(value=25)    # Outer annulus radius
+        self._aperture_radius = tk.IntVar(value=20)  # Aperture radius in pixels
+        self._annulus_inner = tk.IntVar(value=30)    # Inner annulus radius
+        self._annulus_outer = tk.IntVar(value=45)    # Outer annulus radius
         self._photometry_data: list = []  # [{time, target_flux, comp_flux, relative_flux}, ...]
         self._photometry_data_max = 10000  # Max data points to keep
         self._lightcurve_window = None
