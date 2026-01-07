@@ -13,6 +13,7 @@ os.environ['MKL_NUM_THREADS'] = '4'
 os.environ['NUMEXPR_NUM_THREADS'] = '4'
 
 from ..api import CerberusAPI
+from ..config import get_config
 from .panels import (
     CameraControlsPanel,
     SubarrayPanel,
@@ -125,13 +126,13 @@ class CerberusGUI:
         default_font = font.nametofont("TkDefaultFont")
         default_font.configure(
             family="Ubuntu",  # or "Noto Sans"
-            size=16
+            size=14
         )
 
         # Make headings slightly heavier via a named style only
         style.configure(
             "TLabelframe.Label",
-            font=(default_font.actual("family"), 16, "normal")
+            font=(default_font.actual("family"), 14, "normal")
         )
 
 
@@ -291,6 +292,18 @@ class CerberusGUI:
         import threading
 
         def connect_thread():
+            config = get_config()
+
+            # Auto-connect telescope (if enabled in config)
+            if config.telescope.auto_connect:
+                try:
+                    if self.api.connect_telescope():
+                        logger.info("Telescope auto-connected")
+                    else:
+                        logger.info("Telescope not available for auto-connect")
+                except Exception as e:
+                    logger.debug(f"Telescope auto-connect failed: {e}")
+
             # Auto-connect camera
             try:
                 if self.api.connect_camera():

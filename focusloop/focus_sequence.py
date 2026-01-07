@@ -206,6 +206,7 @@ class FocusLoop:
         # Move focus and verify TCS accepted the command
         self.logger.info(f"Moving focus to {position:.2f} mm")
         result = self.telescope.set_focus(position)
+        time.sleep(1)
         if result is False:  # Explicitly check for False (not None)
             raise RuntimeError(f"TCS rejected focus command to {position:.2f} mm")
 
@@ -235,30 +236,26 @@ class FocusLoop:
 
         filepath = os.path.join(self.config.output_dir, filename)
 
-        # Build extra headers for focus-specific metadata
-        extra_headers = {
-            'FOCUS': (position, 'Focus position in mm'),
-        }
-
         # Use API's capture_single_to_fits if available (same controller as regular imaging)
-        # Otherwise fall back to direct camera capture
+        # TELFOCUS header is automatically added by the API from telescope state
         if hasattr(self, 'api') and self.api is not None:
             result = self.api.capture_single_to_fits(
                 filepath=filepath,
-                object_name=self.config.object_name,
-                extra_headers=extra_headers
+                object_name=self.config.object_name
             )
             if result is None:
                 raise RuntimeError("Failed to capture focus image via API")
+            else:
+                self.logger.info(f"Focus image captured at {filepath}")
         else:
             # Fallback: direct camera capture (legacy path)
             frame = self.camera.capture_single()
             if frame is None:
                 raise RuntimeError("Failed to capture focus image")
 
-            # Save with metadata
+            # Save with metadata (include TELFOCUS since API isn't available)
             header = {
-                'FOCUS': (position, 'Focus position in mm'),
+                'TELFOCUS': (position, 'Telescope focus (mm)'),
                 'OBJECT': (self.config.object_name, 'Object name'),
             }
             if filter_name:

@@ -270,7 +270,7 @@ class FocusAnalyzer:
         """
         Read focus position from FITS header.
 
-        Looks for FOCUS or TELFOCUS keywords.
+        Looks for TELFOCUS or FOCUS keywords (TELFOCUS preferred).
 
         Args:
             fits_path: Path to FITS file
@@ -284,18 +284,18 @@ class FocusAnalyzer:
             with fits.open(fits_path) as hdul:
                 # Check primary header first
                 header = hdul[0].header
-                if 'FOCUS' in header:
-                    return float(header['FOCUS'])
                 if 'TELFOCUS' in header:
                     return float(header['TELFOCUS'])
+                if 'FOCUS' in header:
+                    return float(header['FOCUS'])
 
                 # Check image extension if present
                 if len(hdul) > 1 and hasattr(hdul[1], 'header'):
                     header = hdul[1].header
-                    if 'FOCUS' in header:
-                        return float(header['FOCUS'])
                     if 'TELFOCUS' in header:
                         return float(header['TELFOCUS'])
+                    if 'FOCUS' in header:
+                        return float(header['FOCUS'])
 
         except Exception as e:
             self.logger.warning(f"Could not read focus from {fits_path}: {e}")

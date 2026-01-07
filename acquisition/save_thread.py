@@ -39,7 +39,9 @@ def write_fits_cube(
     object_name: str,
     cube_index: int,
     camera_params: Dict[str, Any],
-    filter_name: Optional[str] = None
+    filter_name: Optional[str] = None,
+    telescope_position: Optional[Dict[str, Any]] = None,
+    telescope_status: Optional[Dict[str, Any]] = None
 ) -> tuple:
     """
     Write FITS file from numpy arrays - runs in thread pool.
@@ -71,6 +73,29 @@ def write_fits_cube(
             except:
                 pass
 
+        # Add telescope position data
+        if telescope_position:
+            primary_hdr['TELRA'] = (telescope_position.get('ra', 'N/A'), 'Right Ascension')
+            primary_hdr['TELDEC'] = (telescope_position.get('dec', 'N/A'), 'Declination')
+            primary_hdr['TELHA'] = (telescope_position.get('ha', 'N/A'), 'Hour Angle')
+            primary_hdr['TELLST'] = (telescope_position.get('lst', 'N/A'), 'Local Sidereal Time')
+            primary_hdr['AIRMASS'] = (telescope_position.get('airmass', 'N/A'), 'Airmass')
+            primary_hdr['TELUTC'] = (telescope_position.get('utc_time', 'N/A'), 'UTC time from TCS')
+            primary_hdr['TELDAY'] = (telescope_position.get('utc_day', 'N/A'), 'UTC day number')
+
+        # Add telescope status data
+        if telescope_status:
+            primary_hdr['TELFOCUS'] = (telescope_status.get('focus_mm', 'N/A'), 'Focus position (mm)')
+            primary_hdr['TUBELEN'] = (telescope_status.get('tube_length_mm', 'N/A'), 'Tube length (mm)')
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore")
+                primary_hdr['HIERARCH TEL OFFSET_RA'] = (telescope_status.get('offset_ra_arcsec', 'N/A'), 'RA offset (arcsec)')
+                primary_hdr['HIERARCH TEL OFFSET_DEC'] = (telescope_status.get('offset_dec_arcsec', 'N/A'), 'Dec offset (arcsec)')
+                primary_hdr['HIERARCH TEL RATE_RA'] = (telescope_status.get('rate_ra_arcsec_hr', 'N/A'), 'RA rate (arcsec/hr)')
+                primary_hdr['HIERARCH TEL RATE_DEC'] = (telescope_status.get('rate_dec_arcsec_hr', 'N/A'), 'Dec rate (arcsec/hr)')
+            primary_hdr['CASSRING'] = (telescope_status.get('cass_ring_angle', 'N/A'), 'Cass ring angle (deg)')
+            primary_hdr['TELID'] = (telescope_status.get('telescope_id', 'N/A'), 'Telescope ID')
+
         # Primary HDU (header only)
         primary_hdu = fits.PrimaryHDU(header=primary_hdr)
 
@@ -78,12 +103,16 @@ def write_fits_cube(
         image_hdu = fits.ImageHDU(data=frames)
         image_hdu.header['EXTNAME'] = 'DATA_CUBE'
 
-        # Add camera parameters
+        # Add camera parameters using HIERARCH for long keys
         for key, value in camera_params.items():
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore")
-                    image_hdu.header[key[:8]] = value
+                    if len(key) > 8:
+                        # Use HIERARCH convention for long keywords
+                        image_hdu.header[f'HIERARCH CAM {key}'] = value
+                    else:
+                        image_hdu.header[key] = value
             except:
                 pass
 
@@ -130,7 +159,8 @@ class OptimizedSaveThread(threading.Thread):
         header_dict: Optional[Dict[str, Any]] = None,
         frames_per_cube: int = 100,
         camera_params: Optional[Dict[str, Any]] = None,
-        filter_callback: Optional[Callable] = None
+        filter_callback: Optional[Callable] = None,
+        telescope_callback: Optional[Callable] = None
     ):
         super().__init__(name="SaveThread", daemon=True)
 
@@ -142,6 +172,7 @@ class OptimizedSaveThread(threading.Thread):
         self.frames_per_cube = frames_per_cube
         self.camera_params = camera_params or {}
         self.filter_callback = filter_callback
+        self.telescope_callback = telescope_callback  # Returns (position_dict, status_dict)
         self.cube_index = 0
 
         # Current accumulation buffer (allocated on first frame)
@@ -262,6 +293,15 @@ class OptimizedSaveThread(threading.Thread):
                 except:
                     pass
 
+            # Get current telescope data
+            tel_position = None
+            tel_status = None
+            if self.telescope_callback:
+                try:
+                    tel_position, tel_status = self.telescope_callback()
+                except Exception as e:
+                    logger.warning(f"Telescope callback failed: {e}")
+
             logger.info(f"Queuing cube {self.cube_index} ({num_frames} frames). "
                        f"Pending: {len(self.pending_writes)}")
 
@@ -270,7 +310,8 @@ class OptimizedSaveThread(threading.Thread):
                 write_fits_cube,
                 frames_copy, ts_copy, fs_copy,
                 filepath, dict(self.header_dict), self.object_name,
-                self.cube_index, dict(self.camera_params), filter_name
+                self.cube_index, dict(self.camera_params), filter_name,
+                tel_position, tel_status
             )
 
             self.pending_writes.append((filepath, future, time.time()))

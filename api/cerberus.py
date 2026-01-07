@@ -462,6 +462,41 @@ class CerberusAPI:
                     return None
             return None
 
+        # Create telescope callback
+        def get_telescope_data():
+            """Get current telescope position and status for FITS header"""
+            if self.telescope and self._state.telescope_connected:
+                try:
+                    position = self.telescope.get_position()
+                    status = self.telescope.get_status()
+                    # Convert to dicts for serialization
+                    pos_dict = {
+                        'ra': position.ra,
+                        'dec': position.dec,
+                        'ha': position.ha,
+                        'lst': position.lst,
+                        'airmass': position.airmass,
+                        'utc_time': position.utc_time,
+                        'utc_day': position.utc_day,
+                    } if position else None
+                    status_dict = {
+                        'focus_mm': status.focus_mm,
+                        'tube_length_mm': status.tube_length_mm,
+                        'offset_ra_arcsec': status.offset_ra_arcsec,
+                        'offset_dec_arcsec': status.offset_dec_arcsec,
+                        'rate_ra_arcsec_hr': status.rate_ra_arcsec_hr,
+                        'rate_dec_arcsec_hr': status.rate_dec_arcsec_hr,
+                        'cass_ring_angle': status.cass_ring_angle,
+                        'telescope_id': status.telescope_id,
+                    } if status else None
+                    if pos_dict is None or status_dict is None:
+                        logger.warning(f"TCS connected but got incomplete data: position={position is not None}, status={status is not None}")
+                    return pos_dict, status_dict
+                except Exception as e:
+                    logger.warning(f"TCS connected but failed to get data: {e}")
+                    return None, None
+            return None, None
+
         # Create and start save thread with ProcessPoolExecutor
         self.save_thread = OptimizedSaveThread(
             save_queue=self.save_queue,
@@ -470,7 +505,8 @@ class CerberusAPI:
             header_dict=header_dict,
             frames_per_cube=frames_per_cube,
             camera_params=self.camera.get_all_params(),
-            filter_callback=get_current_filter
+            filter_callback=get_current_filter,
+            telescope_callback=get_telescope_data
         )
         self.save_thread.start()
 

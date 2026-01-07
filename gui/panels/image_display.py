@@ -173,16 +173,11 @@ class ImageDisplayPanel(ttk.LabelFrame):
         ).pack(side=tk.LEFT)
 
         self._guiding_status_var = tk.StringVar(value="Not guiding")
-        ttk.Label(guiding_row, textvariable=self._guiding_status_var, width=30).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(guiding_row, textvariable=self._guiding_status_var, width=22).pack(side=tk.LEFT, padx=(5, 0))
 
         ttk.Button(
-            guiding_row, text="Reset Ref", command=self._reset_guiding_reference, width=8
-        ).pack(side=tk.LEFT, padx=(10, 0))
-
-        ttk.Label(
-            guiding_row, text="(Set FWHM target first)",
-            font=("TkDefaultFont", 9), foreground="gray"
-        ).pack(side=tk.LEFT, padx=(10, 0))
+            guiding_row, text="Reset", command=self._reset_guiding_reference, width=5
+        ).pack(side=tk.LEFT, padx=(5, 0))
 
         # Photometry controls
         phot_frame = ttk.LabelFrame(self, text="Photometry", padding=3)

@@ -26,6 +26,7 @@ class TelescopeConfig:
     timeout_seconds: float = 30.0
     focus_min_mm: float = 1.0
     focus_max_mm: float = 74.0
+    auto_connect: bool = True
 
 
 @dataclass

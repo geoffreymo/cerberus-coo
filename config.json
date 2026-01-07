@@ -4,7 +4,8 @@
         "port": 49200,
         "timeout_seconds": 30.0,
         "focus_min_mm": 1.0,
-        "focus_max_mm": 74.0
+        "focus_max_mm": 74.0,
+        "auto_connect": true
     },
 
     "camera": {
@@ -42,8 +43,8 @@
         },
         "focus_offsets_mm": {
             "clear": 0.0,
-            "u": 0.0,
-            "g": 0.0,
+            "u": 5.0,
+            "g": 3.0,
             "r": 0.0,
             "i": 0.0,
             "z": 0.0,
