@@ -379,11 +379,20 @@ class CameraControlsPanel(ttk.LabelFrame):
 
         selected = self.filter_var.get()
         if selected:
-            try:
-                self.api.set_filter(selected)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"Failed to set filter: {e}")
+            # Run in background thread - filter wheel move + focus change can block
+            threading.Thread(
+                target=self._do_filter_change,
+                args=(selected,),
+                daemon=True
+            ).start()
+
+    def _do_filter_change(self, filter_name: str):
+        """Execute filter change in background thread."""
+        try:
+            self.api.set_filter(filter_name)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to set filter: {e}")
 
     def _on_readout_change(self, event=None):
         """Handle readout mode change."""

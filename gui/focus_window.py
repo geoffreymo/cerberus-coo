@@ -643,11 +643,21 @@ class FocusWindow(tk.Toplevel):
 
         try:
             focus = float(self.focus_goto_var.get())
+            # Run in background thread - TCS blocks until focus move completes
+            threading.Thread(
+                target=self._do_focus_go,
+                args=(focus,),
+                daemon=True
+            ).start()
+        except ValueError:
+            pass
+
+    def _do_focus_go(self, focus: float):
+        """Execute focus go in background thread."""
+        try:
             success = self.api.set_focus(focus)
             if not success:
                 logger.error(f"TCS rejected focus command: {focus} mm")
-        except ValueError:
-            pass
         except Exception as e:
             logger.error(f"Failed to set focus: {e}")
 
@@ -658,11 +668,21 @@ class FocusWindow(tk.Toplevel):
 
         try:
             offset = float(self.focus_offset_var.get()) * direction
+            # Run in background thread - TCS blocks until focus move completes
+            threading.Thread(
+                target=self._do_focus_offset,
+                args=(offset,),
+                daemon=True
+            ).start()
+        except ValueError:
+            pass
+
+    def _do_focus_offset(self, offset: float):
+        """Execute focus offset in background thread."""
+        try:
             success = self.api.offset_focus(offset)
             if not success:
                 logger.error(f"TCS rejected focus offset command: {offset:+.2f} mm")
-        except ValueError:
-            pass
         except Exception as e:
             logger.error(f"Failed to offset focus: {e}")
 

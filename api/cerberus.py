@@ -82,6 +82,9 @@ class CerberusAPI:
         self.telescope = TelescopeController()
         self.filterwheel: Optional['FilterWheel'] = None
 
+        # Lock for filter wheel operations (filter wheel has no internal locking)
+        self._filterwheel_lock = threading.Lock()
+
         # System state
         self._state = SystemState()
         self._state_lock = threading.Lock()
@@ -774,30 +777,32 @@ class CerberusAPI:
             logger.error("Filter wheel not connected")
             return False
 
-        try:
-            # Get previous filter for logging
-            previous_filter = self._state.current_filter
+        # Serialize filter wheel access (hardware has no internal locking)
+        with self._filterwheel_lock:
+            try:
+                # Get previous filter for logging
+                previous_filter = self._state.current_filter
 
-            # Change filter
-            self.filterwheel.filter = name
-            self.filterwheel.wait_for_move()
+                # Change filter
+                self.filterwheel.filter = name
+                self.filterwheel.wait_for_move()
 
-            with self._state_lock:
-                self._state.current_filter = name
+                with self._state_lock:
+                    self._state.current_filter = name
 
-            # Log filter change for operational record
-            logger.info(f"FILTER CHANGE: {previous_filter} -> {name}")
+                # Log filter change for operational record
+                logger.info(f"FILTER CHANGE: {previous_filter} -> {name}")
 
-            # Apply focus position if requested and telescope is connected
-            if apply_focus and self._state.telescope_connected:
-                self._apply_filter_focus_position(name)
+                # Apply focus position if requested and telescope is connected
+                if apply_focus and self._state.telescope_connected:
+                    self._apply_filter_focus_position(name)
 
-            self._notify_status_change()
-            return True
+                self._notify_status_change()
+                return True
 
-        except Exception as e:
-            logger.error(f"FILTER CHANGE FAILED: {self._state.current_filter} -> {name}: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"FILTER CHANGE FAILED: {self._state.current_filter} -> {name}: {e}")
+                return False
 
     def _apply_filter_focus_position(self, filter_name: str):
         """
