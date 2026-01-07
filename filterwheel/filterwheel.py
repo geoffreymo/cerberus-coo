@@ -91,6 +91,8 @@ class FilterWheel:
     def filter(self):
         """Get current filter name."""
         pos = self.position
+        if pos == -1:
+            return "Moving..."
         return self.filters.get(pos, f"Position {pos}")
     
     @filter.setter
