@@ -262,6 +262,7 @@ class CameraController:
         if not DCamLock.acquire_capture(timeout=0.005):
             return
 
+        lock_released = False
         try:
             if not self._capturing or self._stop_requested.is_set():
                 return
@@ -275,14 +276,17 @@ class CameraController:
                     frame, npBuf, timestamp, framestamp = result
                     frame_copy = np.copy(npBuf)
 
+                    # Release lock before processing so other threads can access DCAM
                     DCamLock.release_capture()
+                    lock_released = True
 
                     # Process frame (outside lock)
                     self._process_frame(frame_copy, timestamp, framestamp)
                     return
 
         finally:
-            DCamLock.release_capture()
+            if not lock_released:
+                DCamLock.release_capture()
 
     def _process_frame(self, frame: np.ndarray, timestamp, framestamp: int):
         """Process frame (matches cerberus_gui_test.py exactly)."""

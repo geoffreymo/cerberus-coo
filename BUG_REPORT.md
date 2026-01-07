@@ -14,25 +14,24 @@
 
 ## CRITICAL Bugs (Fix Immediately)
 
-### 1. Race Condition - Two-Socket TCS Has No Thread Synchronization
+### 1. ~~Race Condition - Two-Socket TCS Has No Thread Synchronization~~ FIXED
 **File:** `hardware/telescope/client.py:127-148`
 
 The two-socket TCS implementation has no locks. If multiple threads call `get_position()` while another calls `set_focus()`, race conditions can occur.
 
-**Fix:** Add `threading.RLock` for command and status clients:
-```python
-self._cmd_lock = threading.RLock()
-self._status_lock = threading.RLock()
-```
+**Fix applied:**
+- Added `_cmd_lock` to protect command client methods
+- Save thread now reads from cached state instead of querying TCS
+- Status polling cached in `self._state`, updated every 500ms
 
 ---
 
-### 2. Double-Release of RLock in Camera Capture
+### 2. ~~Double-Release of RLock in Camera Capture~~ FIXED
 **File:** `hardware/camera/controller.py:277-285`
 
 The capture lock is released inside the `try` block AND in the `finally` block, causing double-release.
 
-**Fix:** Use a flag to track if lock was already released:
+**Fix applied:** Added `lock_released` flag to track early release:
 ```python
 lock_released = False
 try:
@@ -50,18 +49,12 @@ finally:
 
 ## HIGH Bugs (Fix Soon)
 
-### 3. Wrong Writer Object for Statistics
+### 3. ~~Wrong Writer Object for Statistics~~ FIXED
 **File:** `api/cerberus.py:1233-1236`
 
 Status updates read from `self.writer` (unused old object) instead of `self.save_thread`. Statistics show 0 frames saved during acquisition.
 
-**Fix:**
-```python
-if is_saving and self.save_thread:
-    frames_written = self.save_thread.total_frames_saved
-    frames_dropped = self.save_thread.total_frames_dropped
-    cubes_written = self.save_thread.cubes_written
-```
+**Fix applied:** Changed to use `self.save_thread` for statistics.
 
 ---
 
