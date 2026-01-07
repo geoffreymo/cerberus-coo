@@ -4,6 +4,6 @@ Data Acquisition Module
 Handles saving frames to FITS data cubes.
 """
 
-from .writer import FITSWriter
+from .save_thread import OptimizedSaveThread
 
-__all__ = ['FITSWriter']
+__all__ = ['OptimizedSaveThread']

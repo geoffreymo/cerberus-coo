@@ -41,7 +41,8 @@ def write_fits_cube(
     camera_params: Dict[str, Any],
     filter_name: Optional[str] = None,
     telescope_position: Optional[Dict[str, Any]] = None,
-    telescope_status: Optional[Dict[str, Any]] = None
+    telescope_status: Optional[Dict[str, Any]] = None,
+    cube_start_time: Optional[float] = None
 ) -> tuple:
     """
     Write FITS file from numpy arrays - runs in thread pool.
@@ -58,9 +59,14 @@ def write_fits_cube(
         primary_hdr['CUBEIDX'] = (cube_index, 'Cube index number')
         primary_hdr['NFRAMES'] = (num_frames, 'Number of frames in cube')
 
-        # UTC timestamp
-        utc_now = datetime.now(timezone.utc)
-        primary_hdr['DATE-OBS'] = (utc_now.isoformat(), 'UTC at file write')
+        # Exposure start time (DATE-OBS = when first frame was captured)
+        if cube_start_time is not None:
+            exp_start_utc = datetime.fromtimestamp(cube_start_time, tz=timezone.utc)
+            primary_hdr['DATE-OBS'] = (exp_start_utc.isoformat(), 'UTC at exposure start')
+        else:
+            # Fallback to current time if start time not recorded
+            utc_now = datetime.now(timezone.utc)
+            primary_hdr['DATE-OBS'] = (utc_now.isoformat(), 'UTC at file write')
 
         # Filter name
         if filter_name:
@@ -181,6 +187,9 @@ class OptimizedSaveThread(threading.Thread):
         self.fs_buffer = None
         self.current_frame_idx = 0
 
+        # Track wall-clock time of first frame in current cube
+        self.cube_start_time: Optional[float] = None  # Unix timestamp
+
         # Thread pool for parallel writes
         self.executor = ThreadPoolExecutor(max_workers=self.NUM_WRITERS)
         self.pending_writes = []
@@ -217,6 +226,10 @@ class OptimizedSaveThread(threading.Thread):
 
                         # Add frame to buffer
                         if self.current_frame_idx < self.frames_per_cube:
+                            # Record wall-clock time of first frame in this cube
+                            if self.current_frame_idx == 0:
+                                self.cube_start_time = time.time()
+
                             self.frame_buffer[self.current_frame_idx] = frame
                             self.ts_buffer[self.current_frame_idx] = timestamp
                             self.fs_buffer[self.current_frame_idx] = framestamp
@@ -311,13 +324,14 @@ class OptimizedSaveThread(threading.Thread):
                 frames_copy, ts_copy, fs_copy,
                 filepath, dict(self.header_dict), self.object_name,
                 self.cube_index, dict(self.camera_params), filter_name,
-                tel_position, tel_status
+                tel_position, tel_status, self.cube_start_time
             )
 
             self.pending_writes.append((filepath, future, time.time()))
 
-            # Reset buffer index for next cube
+            # Reset buffer index and start time for next cube
             self.current_frame_idx = 0
+            self.cube_start_time = None
 
         except Exception as e:
             logger.error(f"Write cube error: {e}")

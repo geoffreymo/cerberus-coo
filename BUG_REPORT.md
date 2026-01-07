@@ -107,12 +107,12 @@ def __enter__(self):
 
 ---
 
-### 7. Double-Counting of Saved Frames
+### 7. ~~Double-Counting of Saved Frames~~ N/A - writer.py deleted
 **File:** `acquisition/writer.py:344,439`
 
-Frames counted as "saved" immediately when queued, but counted again as "dropped" if write fails.
+~~Frames counted as "saved" immediately when queued, but counted again as "dropped" if write fails.~~
 
-**Fix:** Don't increment `_total_frames_saved` until write is confirmed successful in `_check_pending_writes()`.
+**Status:** File deleted - `save_thread.py` is the active implementation and doesn't have this issue.
 
 ---
 
@@ -218,17 +218,15 @@ if position_mm < self._focus_min or position_mm > self._focus_max:
 
 ---
 
-### 17. Thread-Unsafe Access to _object_name and _comment
+### 17. ~~Thread-Unsafe Access to _object_name and _comment~~ N/A - writer.py deleted
 **File:** `acquisition/writer.py:464, 482`
 
-`_write_fits` accesses these fields without lock protection.
-
-**Fix:** Pass values as parameters to `_write_fits()`.
+**Status:** File deleted - `save_thread.py` passes all values as parameters.
 
 ---
 
 ### 18. String 'N/A' for Numeric FITS Headers
-**File:** `acquisition/writer.py:554-571`, `acquisition/save_thread.py:78-97`
+**File:** `acquisition/save_thread.py:78-97`
 
 Using 'N/A' string for fields like AIRMASS that should be numeric.
 
@@ -327,20 +325,24 @@ Use `threading.Event()` instead of plain boolean.
 
 ---
 
-### 33. Memory Leak in _cube_telescope_data on Error
+### 33. ~~Memory Leak in _cube_telescope_data on Error~~ N/A - writer.py deleted
 **File:** `acquisition/writer.py:329-333, 417-418`
+
+**Status:** File deleted.
 
 ---
 
 ### 34. Queue Get Timeout Too Short (1ms)
-**File:** `acquisition/writer.py:315`, `acquisition/save_thread.py:212`
+**File:** `acquisition/save_thread.py:212`
 
 Causes 1000 wakeups/sec. Use 0.1 second timeout.
 
 ---
 
-### 35. _timing_info Modified Without Lock
+### 35. ~~_timing_info Modified Without Lock~~ N/A - writer.py deleted
 **File:** `acquisition/writer.py:320-322, 573-608`
+
+**Status:** File deleted.
 
 ---
 
@@ -351,10 +353,10 @@ Dataclass default is 100, JSON has 1000.
 
 ---
 
-### 37. Unused FITSWriter Methods
-**File:** `api/cerberus.py:1345`
+### 37. ~~Unused FITSWriter Methods~~ FIXED - FITSWriter deleted
+**File:** `acquisition/writer.py`, `api/cerberus.py`
 
-`_update_writer_telescope_data()` writes to unused object.
+**Status:** Entire `FITSWriter` class and `writer.py` file deleted. Was unused dead code.
 
 ---
 

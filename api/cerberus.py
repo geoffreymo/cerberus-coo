@@ -13,7 +13,6 @@ import numpy as np
 
 from ..hardware.camera import CameraController
 from ..hardware.telescope import TelescopeController
-from ..acquisition import FITSWriter  # Keep for backwards compatibility
 from ..acquisition.save_thread import OptimizedSaveThread
 from ..config import get_config
 from .state import SystemState
@@ -82,9 +81,6 @@ class CerberusAPI:
         self.camera = CameraController()
         self.telescope = TelescopeController()
         self.filterwheel: Optional['FilterWheel'] = None
-
-        # Keep old writer for backwards compatibility (unused)
-        self.writer = FITSWriter()
 
         # System state
         self._state = SystemState()
