@@ -112,6 +112,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._guiding_reference: Optional[Tuple[float, float]] = None  # (x, y) reference position in pixels
         self._position_history: list = []  # [(timestamp, x_offset, y_offset), ...]
         self._last_correction_time = 0
+        self._last_guiding_log_time = 0  # For periodic drift logging
         self._guiding_calibration_start = 0  # When calibration started
 
         self._create_widgets()
@@ -163,21 +164,26 @@ class ImageDisplayPanel(ttk.LabelFrame):
         guiding_frame = ttk.LabelFrame(self, text="Guiding", padding=3)
         guiding_frame.pack(fill=tk.X, pady=2)
 
-        guiding_row = ttk.Frame(guiding_frame)
-        guiding_row.pack(fill=tk.X)
+        # Row 1: Enable checkbox and Reset button
+        guiding_row1 = ttk.Frame(guiding_frame)
+        guiding_row1.pack(fill=tk.X)
 
         self._guiding_enabled_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            guiding_row, text="Enable", variable=self._guiding_enabled_var,
+            guiding_row1, text="Enable", variable=self._guiding_enabled_var,
             command=self._toggle_guiding
         ).pack(side=tk.LEFT)
 
-        self._guiding_status_var = tk.StringVar(value="Not guiding")
-        ttk.Label(guiding_row, textvariable=self._guiding_status_var, width=22).pack(side=tk.LEFT, padx=(5, 0))
-
         ttk.Button(
-            guiding_row, text="Reset", command=self._reset_guiding_reference, width=5
-        ).pack(side=tk.LEFT, padx=(5, 0))
+            guiding_row1, text="Reset", command=self._reset_guiding_reference, width=5
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        # Row 2: Drift status
+        guiding_row2 = ttk.Frame(guiding_frame)
+        guiding_row2.pack(fill=tk.X)
+
+        self._guiding_status_var = tk.StringVar(value="Not guiding")
+        ttk.Label(guiding_row2, textvariable=self._guiding_status_var).pack(side=tk.LEFT)
 
         # Photometry controls
         phot_frame = ttk.LabelFrame(self, text="Photometry", padding=3)
@@ -1065,6 +1071,14 @@ class ImageDisplayPanel(ttk.LabelFrame):
             # Check if correction is needed
             threshold = self._guiding_config.correction_threshold_arcsec
             interval = self._guiding_config.correction_interval_seconds
+
+            # Periodic drift logging (every correction interval)
+            if (now - self._last_guiding_log_time) >= interval:
+                self._last_guiding_log_time = now
+                if drift_total_arcsec >= threshold:
+                    logger.info(f"GUIDING: drift={drift_total_arcsec:.2f}\" (RA:{drift_x_arcsec:+.2f}\", Dec:{drift_y_arcsec:+.2f}\") - correction needed")
+                else:
+                    logger.info(f"GUIDING: drift={drift_total_arcsec:.2f}\" (RA:{drift_x_arcsec:+.2f}\", Dec:{drift_y_arcsec:+.2f}\") - within threshold ({threshold:.2f}\")")
 
             if drift_total_arcsec >= threshold and (now - self._last_correction_time) >= interval:
                 self._apply_guiding_correction(drift_x_arcsec, drift_y_arcsec)
