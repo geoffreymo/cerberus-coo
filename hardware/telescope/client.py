@@ -2,6 +2,7 @@
 """Telescope controller wrapper for P200 TCS."""
 
 import logging
+import threading
 from typing import Optional
 from dataclasses import dataclass
 
@@ -99,6 +100,9 @@ class TelescopeController:
         self._cmd_client: Optional[TCSClient] = None    # For commands (set_focus, etc.)
         self._status_client: Optional[TCSClient] = None  # For queries (get_position, etc.)
         self._is_connected = False
+
+        # Lock for command client (protects against focus thread + guiding conflicts)
+        self._cmd_lock = threading.Lock()
 
     @property
     def is_connected(self) -> bool:
@@ -207,16 +211,17 @@ class TelescopeController:
             logger.error("Not connected to TCS")
             return False
 
-        try:
-            logger.info(f"Setting focus to {position_mm:.2f} mm")
-            self._cmd_client.set_focus(position_mm)
-            return True
-        except TCSCommandError as e:
-            logger.error(f"Focus command failed: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Error setting focus: {e}")
-            return False
+        with self._cmd_lock:
+            try:
+                logger.info(f"Setting focus to {position_mm:.2f} mm")
+                self._cmd_client.set_focus(position_mm)
+                return True
+            except TCSCommandError as e:
+                logger.error(f"Focus command failed: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error setting focus: {e}")
+                return False
 
     def offset_focus(self, offset_mm: float) -> bool:
         """
@@ -232,16 +237,17 @@ class TelescopeController:
             logger.error("Not connected to TCS")
             return False
 
-        try:
-            logger.info(f"Offsetting focus by {offset_mm:+.2f} mm")
-            self._cmd_client.offset_focus(offset_mm)
-            return True
-        except TCSCommandError as e:
-            logger.error(f"Focus offset command failed: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Error offsetting focus: {e}")
-            return False
+        with self._cmd_lock:
+            try:
+                logger.info(f"Offsetting focus by {offset_mm:+.2f} mm")
+                self._cmd_client.offset_focus(offset_mm)
+                return True
+            except TCSCommandError as e:
+                logger.error(f"Focus offset command failed: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error offsetting focus: {e}")
+                return False
 
     def get_focus(self) -> Optional[float]:
         """
@@ -387,60 +393,65 @@ class TelescopeController:
             logger.error("Not connected to TCS")
             return False
 
-        try:
-            logger.info(f"Moving offset: RA {ra_arcsec:+.1f}\", Dec {dec_arcsec:+.1f}\"")
-            self._cmd_client.move_offset(ra_arcsec, dec_arcsec)
-            return True
-        except TCSCommandError as e:
-            logger.error(f"Offset move failed: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Error moving offset: {e}")
-            return False
+        with self._cmd_lock:
+            try:
+                logger.info(f"Moving offset: RA {ra_arcsec:+.1f}\", Dec {dec_arcsec:+.1f}\"")
+                self._cmd_client.move_offset(ra_arcsec, dec_arcsec)
+                return True
+            except TCSCommandError as e:
+                logger.error(f"Offset move failed: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error moving offset: {e}")
+                return False
 
     def move_north(self, arcsec: float) -> bool:
         """Move telescope north by given arcseconds."""
         if not self._is_connected or self._cmd_client is None:
             return False
-        try:
-            self._cmd_client.move_north(arcsec)
-            return True
-        except Exception as e:
-            logger.error(f"Error moving north: {e}")
-            return False
+        with self._cmd_lock:
+            try:
+                self._cmd_client.move_north(arcsec)
+                return True
+            except Exception as e:
+                logger.error(f"Error moving north: {e}")
+                return False
 
     def move_south(self, arcsec: float) -> bool:
         """Move telescope south by given arcseconds."""
         if not self._is_connected or self._cmd_client is None:
             return False
-        try:
-            self._cmd_client.move_south(arcsec)
-            return True
-        except Exception as e:
-            logger.error(f"Error moving south: {e}")
-            return False
+        with self._cmd_lock:
+            try:
+                self._cmd_client.move_south(arcsec)
+                return True
+            except Exception as e:
+                logger.error(f"Error moving south: {e}")
+                return False
 
     def move_east(self, arcsec: float) -> bool:
         """Move telescope east by given arcseconds."""
         if not self._is_connected or self._cmd_client is None:
             return False
-        try:
-            self._cmd_client.move_east(arcsec)
-            return True
-        except Exception as e:
-            logger.error(f"Error moving east: {e}")
-            return False
+        with self._cmd_lock:
+            try:
+                self._cmd_client.move_east(arcsec)
+                return True
+            except Exception as e:
+                logger.error(f"Error moving east: {e}")
+                return False
 
     def move_west(self, arcsec: float) -> bool:
         """Move telescope west by given arcseconds."""
         if not self._is_connected or self._cmd_client is None:
             return False
-        try:
-            self._cmd_client.move_west(arcsec)
-            return True
-        except Exception as e:
-            logger.error(f"Error moving west: {e}")
-            return False
+        with self._cmd_lock:
+            try:
+                self._cmd_client.move_west(arcsec)
+                return True
+            except Exception as e:
+                logger.error(f"Error moving west: {e}")
+                return False
 
     # === Context Manager ===
 

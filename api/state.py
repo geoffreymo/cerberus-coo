@@ -33,7 +33,7 @@ class SystemState:
     camera_frames_captured: int = 0
     camera_params: Dict[str, Any] = field(default_factory=dict)
 
-    # Telescope state
+    # Telescope state (from get_position)
     telescope_connected: bool = False
     telescope_focus: Optional[float] = None
     telescope_ra: Optional[str] = None
@@ -42,6 +42,17 @@ class SystemState:
     telescope_lst: Optional[str] = None
     telescope_airmass: Optional[float] = None
     telescope_utc: Optional[str] = None
+    telescope_utc_day: Optional[str] = None
+    telescope_utc_time: Optional[str] = None
+
+    # Telescope status (from get_status)
+    telescope_tube_length_mm: Optional[float] = None
+    telescope_offset_ra_arcsec: Optional[float] = None
+    telescope_offset_dec_arcsec: Optional[float] = None
+    telescope_rate_ra_arcsec_hr: Optional[float] = None
+    telescope_rate_dec_arcsec_hr: Optional[float] = None
+    telescope_cass_ring_angle: Optional[float] = None
+    telescope_id: Optional[str] = None
 
     # Filter wheel state
     filterwheel_connected: bool = False
@@ -85,6 +96,15 @@ class SystemState:
                 'lst': self.telescope_lst,
                 'airmass': self.telescope_airmass,
                 'utc': self.telescope_utc,
+                'utc_day': self.telescope_utc_day,
+                'utc_time': self.telescope_utc_time,
+                'tube_length_mm': self.telescope_tube_length_mm,
+                'offset_ra_arcsec': self.telescope_offset_ra_arcsec,
+                'offset_dec_arcsec': self.telescope_offset_dec_arcsec,
+                'rate_ra_arcsec_hr': self.telescope_rate_ra_arcsec_hr,
+                'rate_dec_arcsec_hr': self.telescope_rate_dec_arcsec_hr,
+                'cass_ring_angle': self.telescope_cass_ring_angle,
+                'telescope_id': self.telescope_id,
             },
             'filterwheel': {
                 'connected': self.filterwheel_connected,

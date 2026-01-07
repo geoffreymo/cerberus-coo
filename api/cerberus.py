@@ -479,40 +479,46 @@ class CerberusAPI:
                     return None
             return None
 
-        # Create telescope callback
+        # Create telescope callback - reads from cached state (updated by polling)
         def get_telescope_data():
-            """Get current telescope position and status for FITS header"""
-            if self.telescope and self._state.telescope_connected:
-                try:
-                    position = self.telescope.get_position()
-                    status = self.telescope.get_status()
-                    # Convert to dicts for serialization
-                    pos_dict = {
-                        'ra': position.ra,
-                        'dec': position.dec,
-                        'ha': position.ha,
-                        'lst': position.lst,
-                        'airmass': position.airmass,
-                        'utc_time': position.utc_time,
-                        'utc_day': position.utc_day,
-                    } if position else None
-                    status_dict = {
-                        'focus_mm': status.focus_mm,
-                        'tube_length_mm': status.tube_length_mm,
-                        'offset_ra_arcsec': status.offset_ra_arcsec,
-                        'offset_dec_arcsec': status.offset_dec_arcsec,
-                        'rate_ra_arcsec_hr': status.rate_ra_arcsec_hr,
-                        'rate_dec_arcsec_hr': status.rate_dec_arcsec_hr,
-                        'cass_ring_angle': status.cass_ring_angle,
-                        'telescope_id': status.telescope_id,
-                    } if status else None
-                    if pos_dict is None or status_dict is None:
-                        logger.warning(f"TCS connected but got incomplete data: position={position is not None}, status={status is not None}")
-                    return pos_dict, status_dict
-                except Exception as e:
-                    logger.warning(f"TCS connected but failed to get data: {e}")
-                    return None, None
-            return None, None
+            """Get current telescope position and status from cached state for FITS header"""
+            if not self._state.telescope_connected:
+                return None, None
+
+            # Read from cached state - no TCS query needed
+            # State is updated every 500ms by update_status()
+            state = self._state
+
+            # Build position dict from cached state
+            if state.telescope_ra is not None:
+                pos_dict = {
+                    'ra': state.telescope_ra,
+                    'dec': state.telescope_dec,
+                    'ha': state.telescope_ha,
+                    'lst': state.telescope_lst,
+                    'airmass': state.telescope_airmass,
+                    'utc_time': state.telescope_utc_time,
+                    'utc_day': state.telescope_utc_day,
+                }
+            else:
+                pos_dict = None
+
+            # Build status dict from cached state
+            if state.telescope_focus is not None:
+                status_dict = {
+                    'focus_mm': state.telescope_focus,
+                    'tube_length_mm': state.telescope_tube_length_mm,
+                    'offset_ra_arcsec': state.telescope_offset_ra_arcsec,
+                    'offset_dec_arcsec': state.telescope_offset_dec_arcsec,
+                    'rate_ra_arcsec_hr': state.telescope_rate_ra_arcsec_hr,
+                    'rate_dec_arcsec_hr': state.telescope_rate_dec_arcsec_hr,
+                    'cass_ring_angle': state.telescope_cass_ring_angle,
+                    'telescope_id': state.telescope_id,
+                }
+            else:
+                status_dict = None
+
+            return pos_dict, status_dict
 
         # Create and start save thread with ProcessPoolExecutor
         self.save_thread = OptimizedSaveThread(
@@ -1201,6 +1207,7 @@ class CerberusAPI:
         camera_temp = None
         telescope_focus = None
         telescope_pos = None
+        telescope_status = None
         current_filter = None
         frames_written = 0
         frames_dropped = 0
@@ -1226,14 +1233,15 @@ class CerberusAPI:
             if telescope_connected:
                 telescope_focus = self.telescope.get_focus()
                 telescope_pos = self.telescope.get_position()
+                telescope_status = self.telescope.get_status()
 
             if filterwheel_connected and self.filterwheel:
                 current_filter = self.filterwheel.filter
 
-            if is_saving:
-                frames_written = self.writer.frames_written
-                frames_dropped = self.writer.frames_dropped
-                cubes_written = self.writer.cubes_written
+            if is_saving and self.save_thread:
+                frames_written = self.save_thread.total_frames_saved
+                frames_dropped = self.save_thread.total_frames_dropped
+                cubes_written = self.save_thread.cubes_written
 
         except Exception as e:
             logger.error(f"Error reading hardware status: {e}")
@@ -1258,6 +1266,16 @@ class CerberusAPI:
                     self._state.telescope_lst = telescope_pos.lst
                     self._state.telescope_airmass = telescope_pos.airmass
                     self._state.telescope_utc = f"{telescope_pos.utc_day} {telescope_pos.utc_time}"
+                    self._state.telescope_utc_day = telescope_pos.utc_day
+                    self._state.telescope_utc_time = telescope_pos.utc_time
+                if telescope_status:
+                    self._state.telescope_tube_length_mm = telescope_status.tube_length_mm
+                    self._state.telescope_offset_ra_arcsec = telescope_status.offset_ra_arcsec
+                    self._state.telescope_offset_dec_arcsec = telescope_status.offset_dec_arcsec
+                    self._state.telescope_rate_ra_arcsec_hr = telescope_status.rate_ra_arcsec_hr
+                    self._state.telescope_rate_dec_arcsec_hr = telescope_status.rate_dec_arcsec_hr
+                    self._state.telescope_cass_ring_angle = telescope_status.cass_ring_angle
+                    self._state.telescope_id = telescope_status.telescope_id
 
             if filterwheel_connected:
                 self._state.current_filter = current_filter
@@ -1266,10 +1284,6 @@ class CerberusAPI:
                 self._state.frames_saved = frames_written
                 self._state.frames_dropped = frames_dropped
                 self._state.cubes_saved = cubes_written
-
-        # Refresh telescope data in writer for next cube (outside lock, use local copy)
-        if is_saving and telescope_connected:
-            self._update_writer_telescope_data()
 
         self._notify_status_change()
 
@@ -1336,17 +1350,6 @@ class CerberusAPI:
                 logger.warning(f"Could not query filter for cube: {e}")
 
         return (position_dict, status_dict, filter_name)
-
-    def _update_writer_telescope_data(self):
-        """Update the FITS writer with current telescope data (for fallback)."""
-        try:
-            # Get current telescope and filter data
-            position_dict, status_dict, filter_name = self._get_telescope_data_for_cube()
-            self.writer.set_telescope_data(position_dict, status_dict)
-            # Note: filter is handled per-cube via callback, not via this fallback method
-
-        except Exception as e:
-            logger.warning(f"Could not update telescope data: {e}")
 
     def _on_camera_frame(self, frame: np.ndarray, timestamp: float, framestamp: int):
         """Internal handler for camera frames."""
