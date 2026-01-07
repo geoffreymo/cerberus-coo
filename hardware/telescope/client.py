@@ -94,7 +94,10 @@ class TelescopeController:
             self._focus_min = 1.0
             self._focus_max = 74.0
 
-        self._client: Optional[TCSClient] = None
+        # Two separate clients: one for commands, one for status queries
+        # This prevents response mixing when polling status while sending commands
+        self._cmd_client: Optional[TCSClient] = None    # For commands (set_focus, etc.)
+        self._status_client: Optional[TCSClient] = None  # For queries (get_position, etc.)
         self._is_connected = False
 
     @property
@@ -105,6 +108,10 @@ class TelescopeController:
     def connect(self) -> bool:
         """
         Connect to the telescope control system.
+
+        Creates two separate socket connections:
+        - Command client: for focus/offset commands
+        - Status client: for position/status queries
 
         Returns:
             True if connection successful
@@ -119,24 +126,52 @@ class TelescopeController:
 
         try:
             logger.info(f"Connecting to TCS at {self._host}:{self._port}")
-            self._client = TCSClient(
+
+            # Command client
+            self._cmd_client = TCSClient(
                 host=self._host,
                 port=self._port,
                 timeout=self._timeout
             )
-            self._client.connect()
+            self._cmd_client.connect()
+            logger.info("Connected to TCS (command channel)")
+
+            # Status client (separate socket)
+            self._status_client = TCSClient(
+                host=self._host,
+                port=self._port,
+                timeout=self._timeout
+            )
+            self._status_client.connect()
+            logger.info("Connected to TCS (status channel)")
+
             self._is_connected = True
-            logger.info("Connected to TCS")
             return True
 
         except TCSConnectionError as e:
             logger.error(f"Failed to connect to TCS: {e}")
-            self._client = None
+            self._cleanup_clients()
             return False
         except Exception as e:
             logger.error(f"Unexpected error connecting to TCS: {e}")
-            self._client = None
+            self._cleanup_clients()
             return False
+
+    def _cleanup_clients(self):
+        """Clean up client connections."""
+        if self._cmd_client:
+            try:
+                self._cmd_client.disconnect()
+            except:
+                pass
+            self._cmd_client = None
+        if self._status_client:
+            try:
+                self._status_client.disconnect()
+            except:
+                pass
+            self._status_client = None
+        self._is_connected = False
 
     def disconnect(self):
         """Disconnect from the telescope control system."""
@@ -144,13 +179,16 @@ class TelescopeController:
             return
 
         try:
-            if self._client is not None:
-                self._client.disconnect()
-                logger.info("Disconnected from TCS")
+            if self._cmd_client is not None:
+                self._cmd_client.disconnect()
+            if self._status_client is not None:
+                self._status_client.disconnect()
+            logger.info("Disconnected from TCS")
         except Exception as e:
             logger.error(f"Error disconnecting from TCS: {e}")
         finally:
-            self._client = None
+            self._cmd_client = None
+            self._status_client = None
             self._is_connected = False
 
     # === Focus Control ===
@@ -165,13 +203,13 @@ class TelescopeController:
         Returns:
             True if successful
         """
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._cmd_client is None:
             logger.error("Not connected to TCS")
             return False
 
         try:
             logger.info(f"Setting focus to {position_mm:.2f} mm")
-            self._client.set_focus(position_mm)
+            self._cmd_client.set_focus(position_mm)
             return True
         except TCSCommandError as e:
             logger.error(f"Focus command failed: {e}")
@@ -190,13 +228,13 @@ class TelescopeController:
         Returns:
             True if successful
         """
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._cmd_client is None:
             logger.error("Not connected to TCS")
             return False
 
         try:
             logger.info(f"Offsetting focus by {offset_mm:+.2f} mm")
-            self._client.offset_focus(offset_mm)
+            self._cmd_client.offset_focus(offset_mm)
             return True
         except TCSCommandError as e:
             logger.error(f"Focus offset command failed: {e}")
@@ -212,11 +250,11 @@ class TelescopeController:
         Returns:
             Focus position in mm, or None if failed
         """
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._status_client is None:
             return None
 
         try:
-            status = self._client.get_status()
+            status = self._status_client.get_status()
             return status.focus_mm
         except Exception as e:
             logger.error(f"Error getting focus: {e}")
@@ -229,11 +267,11 @@ class TelescopeController:
         Returns:
             FocusStatus with position and tube length, or None if failed
         """
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._status_client is None:
             return None
 
         try:
-            status = self._client.get_status()
+            status = self._status_client.get_status()
             return FocusStatus(
                 position_mm=status.focus_mm,
                 tube_length_mm=status.tube_length_mm
@@ -260,7 +298,7 @@ class TelescopeController:
         """
         import time
 
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._status_client is None:
             logger.error("Not connected to TCS")
             return False
 
@@ -307,11 +345,11 @@ class TelescopeController:
         Returns:
             TelescopePosition with RA, Dec, etc., or None if failed
         """
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._status_client is None:
             return None
 
         try:
-            return self._client.get_position()
+            return self._status_client.get_position()
         except Exception as e:
             logger.error(f"Error getting position: {e}")
             return None
@@ -323,11 +361,11 @@ class TelescopeController:
         Returns:
             TelescopeStatus with focus, offsets, etc., or None if failed
         """
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._status_client is None:
             return None
 
         try:
-            return self._client.get_status()
+            return self._status_client.get_status()
         except Exception as e:
             logger.error(f"Error getting status: {e}")
             return None
@@ -345,13 +383,13 @@ class TelescopeController:
         Returns:
             True if successful
         """
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._cmd_client is None:
             logger.error("Not connected to TCS")
             return False
 
         try:
             logger.info(f"Moving offset: RA {ra_arcsec:+.1f}\", Dec {dec_arcsec:+.1f}\"")
-            self._client.move_offset(ra_arcsec, dec_arcsec)
+            self._cmd_client.move_offset(ra_arcsec, dec_arcsec)
             return True
         except TCSCommandError as e:
             logger.error(f"Offset move failed: {e}")
@@ -362,10 +400,10 @@ class TelescopeController:
 
     def move_north(self, arcsec: float) -> bool:
         """Move telescope north by given arcseconds."""
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._cmd_client is None:
             return False
         try:
-            self._client.move_north(arcsec)
+            self._cmd_client.move_north(arcsec)
             return True
         except Exception as e:
             logger.error(f"Error moving north: {e}")
@@ -373,10 +411,10 @@ class TelescopeController:
 
     def move_south(self, arcsec: float) -> bool:
         """Move telescope south by given arcseconds."""
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._cmd_client is None:
             return False
         try:
-            self._client.move_south(arcsec)
+            self._cmd_client.move_south(arcsec)
             return True
         except Exception as e:
             logger.error(f"Error moving south: {e}")
@@ -384,10 +422,10 @@ class TelescopeController:
 
     def move_east(self, arcsec: float) -> bool:
         """Move telescope east by given arcseconds."""
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._cmd_client is None:
             return False
         try:
-            self._client.move_east(arcsec)
+            self._cmd_client.move_east(arcsec)
             return True
         except Exception as e:
             logger.error(f"Error moving east: {e}")
@@ -395,10 +433,10 @@ class TelescopeController:
 
     def move_west(self, arcsec: float) -> bool:
         """Move telescope west by given arcseconds."""
-        if not self._is_connected or self._client is None:
+        if not self._is_connected or self._cmd_client is None:
             return False
         try:
-            self._client.move_west(arcsec)
+            self._cmd_client.move_west(arcsec)
             return True
         except Exception as e:
             logger.error(f"Error moving west: {e}")

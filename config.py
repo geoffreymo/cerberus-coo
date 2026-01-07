@@ -43,7 +43,7 @@ class FilterWheelConfig:
     """Filter wheel configuration."""
     library_path: str = "libEFWFilter.so.1.7"
     filters: Dict[str, str] = field(default_factory=dict)  # position -> name
-    focus_offsets_mm: Dict[str, float] = field(default_factory=dict)  # name -> offset
+    focus_positions_mm: Dict[str, Optional[float]] = field(default_factory=dict)  # name -> absolute focus position (None if not calibrated)
 
 
 @dataclass
@@ -120,17 +120,27 @@ class CerberusConfig:
     gui: GUIConfig = field(default_factory=GUIConfig)
     guiding: GuidingConfig = field(default_factory=GuidingConfig)
 
-    def get_filter_focus_offset(self, filter_name: str) -> float:
+    def get_filter_focus_position(self, filter_name: str) -> Optional[float]:
         """
-        Get focus offset for a filter.
+        Get absolute focus position for a filter.
 
         Args:
             filter_name: Filter name
 
         Returns:
-            Focus offset in mm (0.0 if not configured)
+            Focus position in mm, or None if not calibrated
         """
-        return self.filterwheel.focus_offsets_mm.get(filter_name, 0.0)
+        return self.filterwheel.focus_positions_mm.get(filter_name)
+
+    def set_filter_focus_position(self, filter_name: str, position_mm: float):
+        """
+        Set absolute focus position for a filter.
+
+        Args:
+            filter_name: Filter name
+            position_mm: Focus position in mm
+        """
+        self.filterwheel.focus_positions_mm[filter_name] = position_mm
 
     def get_filter_name(self, position: int) -> Optional[str]:
         """

@@ -349,18 +349,32 @@ class CerberusAPI:
             if self._state.camera_exposure:
                 primary_hdr['EXPTIME'] = (self._state.camera_exposure, 'Exposure time (s)')
 
-            # Telescope info if connected
-            if self._state.telescope_connected:
-                if self._state.telescope_ra:
-                    primary_hdr['RA'] = (self._state.telescope_ra, 'Right Ascension')
-                if self._state.telescope_dec:
-                    primary_hdr['DEC'] = (self._state.telescope_dec, 'Declination')
-                if self._state.telescope_ha:
-                    primary_hdr['HA'] = (self._state.telescope_ha, 'Hour Angle')
-                if self._state.telescope_airmass:
-                    primary_hdr['AIRMASS'] = (self._state.telescope_airmass, 'Airmass')
-                if self._state.telescope_focus is not None:
-                    primary_hdr['TELFOCUS'] = (self._state.telescope_focus, 'Telescope focus (mm)')
+            # Telescope info if connected - query fresh data
+            if self._state.telescope_connected and self.telescope:
+                try:
+                    position = self.telescope.get_position()
+                    status = self.telescope.get_status()
+
+                    if position:
+                        primary_hdr['TELRA'] = (position.ra, 'Right Ascension')
+                        primary_hdr['TELDEC'] = (position.dec, 'Declination')
+                        primary_hdr['TELHA'] = (position.ha, 'Hour Angle')
+                        primary_hdr['TELLST'] = (position.lst, 'Local Sidereal Time')
+                        primary_hdr['AIRMASS'] = (position.airmass, 'Airmass')
+                        primary_hdr['TELUTC'] = (position.utc_time, 'UTC time from TCS')
+                        primary_hdr['TELDAY'] = (position.utc_day, 'UTC day number')
+
+                    if status:
+                        primary_hdr['TELFOCUS'] = (status.focus_mm, 'Focus position (mm)')
+                        primary_hdr['TUBELEN'] = (status.tube_length_mm, 'Tube length (mm)')
+                        primary_hdr['HIERARCH TEL OFFSET_RA'] = (status.offset_ra_arcsec, 'RA offset (arcsec)')
+                        primary_hdr['HIERARCH TEL OFFSET_DEC'] = (status.offset_dec_arcsec, 'Dec offset (arcsec)')
+                        primary_hdr['HIERARCH TEL RATE_RA'] = (status.rate_ra_arcsec_hr, 'RA rate (arcsec/hr)')
+                        primary_hdr['HIERARCH TEL RATE_DEC'] = (status.rate_dec_arcsec_hr, 'Dec rate (arcsec/hr)')
+                        primary_hdr['CASSRING'] = (status.cass_ring_angle, 'Cass ring angle (deg)')
+                        primary_hdr['TELID'] = (status.telescope_id, 'Telescope ID')
+                except Exception as e:
+                    logger.warning(f"Could not get telescope data for FITS header: {e}")
 
             # Extra headers (e.g. focus position for focus loop)
             if extra_headers:
@@ -377,13 +391,16 @@ class CerberusAPI:
             image_hdu = fits.ImageHDU(data=frame)
             image_hdu.header['EXTNAME'] = 'DATA'
 
-            # Add camera parameters
+            # Add camera parameters using HIERARCH for long keys
             camera_params = self.camera.get_all_params()
             for key, value in camera_params.items():
                 try:
                     with warnings.catch_warnings():
                         warnings.filterwarnings("ignore")
-                        image_hdu.header[key[:8]] = value
+                        if len(key) > 8:
+                            image_hdu.header[f'HIERARCH CAM {key}'] = value
+                        else:
+                            image_hdu.header[key] = value
                 except:
                     pass
 
@@ -737,17 +754,16 @@ class CerberusAPI:
 
         self._notify_status_change()
 
-    def set_filter(self, name: str, apply_focus_offset: bool = True) -> bool:
+    def set_filter(self, name: str, apply_focus: bool = True) -> bool:
         """
-        Set filter by name, optionally applying focus offset.
+        Set filter by name, optionally moving to its calibrated focus position.
 
-        When apply_focus_offset is True and the telescope is connected,
-        the focus will be adjusted based on the configured offset for
-        this filter relative to the previous filter.
+        When apply_focus is True and the telescope is connected,
+        the focus will be set to the calibrated absolute position for this filter.
 
         Args:
             name: Filter name
-            apply_focus_offset: Apply configured focus offset (default True)
+            apply_focus: Move to calibrated focus position (default True)
 
         Returns:
             True if successful
@@ -757,7 +773,7 @@ class CerberusAPI:
             return False
 
         try:
-            # Get previous filter for offset calculation
+            # Get previous filter for logging
             previous_filter = self._state.current_filter
 
             # Change filter
@@ -770,9 +786,9 @@ class CerberusAPI:
             # Log filter change for operational record
             logger.info(f"FILTER CHANGE: {previous_filter} -> {name}")
 
-            # Apply focus offset if requested and telescope is connected
-            if apply_focus_offset and self._state.telescope_connected and previous_filter:
-                self._apply_filter_focus_offset(previous_filter, name)
+            # Apply focus position if requested and telescope is connected
+            if apply_focus and self._state.telescope_connected:
+                self._apply_filter_focus_position(name)
 
             self._notify_status_change()
             return True
@@ -781,31 +797,25 @@ class CerberusAPI:
             logger.error(f"FILTER CHANGE FAILED: {self._state.current_filter} -> {name}: {e}")
             return False
 
-    def _apply_filter_focus_offset(self, from_filter: str, to_filter: str):
+    def _apply_filter_focus_position(self, filter_name: str):
         """
-        Apply focus offset when changing filters.
-
-        The offset is calculated as: new_focus = current_focus + (to_offset - from_offset)
+        Move to calibrated focus position for a filter.
 
         Args:
-            from_filter: Previous filter name
-            to_filter: New filter name
+            filter_name: Filter name
         """
         try:
             config = get_config()
-            from_offset = config.get_filter_focus_offset(from_filter)
-            to_offset = config.get_filter_focus_offset(to_filter)
+            focus_position = config.get_filter_focus_position(filter_name)
 
-            delta = to_offset - from_offset
-
-            if abs(delta) > 0.001:  # Only move if significant difference
-                logger.info(f"Applying focus offset: {from_filter} -> {to_filter}: {delta:+.3f} mm")
-                self.offset_focus(delta)
+            if focus_position is not None:
+                logger.info(f"Moving to calibrated focus for {filter_name}: {focus_position:.2f} mm")
+                self.set_focus(focus_position)
             else:
-                logger.debug(f"No focus offset needed: {from_filter} -> {to_filter}")
+                logger.debug(f"No calibrated focus position for {filter_name}")
 
         except Exception as e:
-            logger.warning(f"Could not apply focus offset: {e}")
+            logger.warning(f"Could not apply focus position: {e}")
 
     def get_filter(self) -> Optional[str]:
         """Get current filter name."""
@@ -819,31 +829,31 @@ class CerberusAPI:
             return []
         return list(self.filterwheel.filters.values())
 
-    def get_filter_focus_offset(self, filter_name: str = None) -> float:
+    def get_filter_focus_position(self, filter_name: str = None) -> Optional[float]:
         """
-        Get focus offset for a filter.
+        Get calibrated focus position for a filter.
 
         Args:
             filter_name: Filter name (uses current filter if None)
 
         Returns:
-            Focus offset in mm
+            Focus position in mm, or None if not calibrated
         """
         if filter_name is None:
             filter_name = self._state.current_filter
         if filter_name is None:
-            return 0.0
+            return None
 
         config = get_config()
-        return config.get_filter_focus_offset(filter_name)
+        return config.get_filter_focus_position(filter_name)
 
-    def set_filter_focus_offset(self, filter_name: str, offset_mm: float, save: bool = True) -> bool:
+    def set_filter_focus_position(self, filter_name: str, position_mm: float, save: bool = True) -> bool:
         """
-        Set focus offset for a filter.
+        Set calibrated focus position for a filter.
 
         Args:
             filter_name: Filter name
-            offset_mm: Focus offset in mm
+            position_mm: Absolute focus position in mm
             save: Save to config file (default True)
 
         Returns:
@@ -851,28 +861,24 @@ class CerberusAPI:
         """
         try:
             config = get_config()
-            config.filterwheel.focus_offsets_mm[filter_name] = offset_mm
-            logger.info(f"Set focus offset for {filter_name}: {offset_mm:.3f} mm")
+            config.set_filter_focus_position(filter_name, position_mm)
+            logger.info(f"Set focus position for {filter_name}: {position_mm:.2f} mm")
 
             if save:
                 self._save_config()
 
             return True
         except Exception as e:
-            logger.error(f"Failed to set focus offset: {e}")
+            logger.error(f"Failed to set focus position: {e}")
             return False
 
-    def calibrate_filter_focus(self, reference_filter: str = None) -> bool:
+    def calibrate_filter_focus(self) -> bool:
         """
-        Calibrate focus offsets for all filters.
+        Calibrate focus positions for all filters.
 
-        Runs a focus loop for each filter and saves the difference from
-        a reference filter (defaults to current filter or first filter).
+        Runs a focus loop for each filter and saves the absolute best focus position.
 
         This is a long-running operation - run focus loop for each filter.
-
-        Args:
-            reference_filter: Reference filter name (offset = 0.0)
 
         Returns:
             True if successful
@@ -886,47 +892,32 @@ class CerberusAPI:
             logger.error("No filters available")
             return False
 
-        # Use reference filter or current/first filter
-        if reference_filter is None:
-            reference_filter = self._state.current_filter or filters[0]
-
-        logger.info(f"Calibrating filter focus with reference: {reference_filter}")
+        starting_filter = self._state.current_filter or filters[0]
+        logger.info(f"Calibrating focus positions for all filters")
 
         # Run focus loop for each filter
-        best_focus_positions = {}
+        success_count = 0
 
         for filter_name in filters:
             logger.info(f"Running focus loop for filter: {filter_name}")
-            self.set_filter(filter_name, apply_focus_offset=False)
+            self.set_filter(filter_name, apply_focus=False)
 
             result = self.run_focus_loop()
             if result and result.success:
-                best_focus_positions[filter_name] = result.best_focus
-                logger.info(f"  Best focus for {filter_name}: {result.best_focus:.2f} mm")
+                self.set_filter_focus_position(filter_name, result.best_focus, save=False)
+                logger.info(f"  Calibrated {filter_name}: {result.best_focus:.2f} mm")
+                success_count += 1
             else:
                 logger.warning(f"  Focus loop failed for {filter_name}")
 
-        # Calculate offsets relative to reference
-        if reference_filter not in best_focus_positions:
-            logger.error(f"Reference filter {reference_filter} failed")
-            return False
-
-        reference_focus = best_focus_positions[reference_filter]
-        logger.info(f"Reference focus ({reference_filter}): {reference_focus:.2f} mm")
-
-        for filter_name, best_focus in best_focus_positions.items():
-            offset = best_focus - reference_focus
-            self.set_filter_focus_offset(filter_name, offset, save=False)
-            logger.info(f"  {filter_name}: offset = {offset:+.3f} mm")
-
-        # Save all offsets
+        # Save all positions
         self._save_config()
 
-        # Return to reference filter
-        self.set_filter(reference_filter, apply_focus_offset=False)
-        self.set_focus(reference_focus)
+        # Return to starting filter
+        self.set_filter(starting_filter, apply_focus=True)
 
-        return True
+        logger.info(f"Calibration complete: {success_count}/{len(filters)} filters calibrated")
+        return success_count > 0
 
     def _save_config(self):
         """Save current config to file."""
@@ -943,7 +934,8 @@ class CerberusAPI:
                     "port": config.telescope.port,
                     "timeout_seconds": config.telescope.timeout_seconds,
                     "focus_min_mm": config.telescope.focus_min_mm,
-                    "focus_max_mm": config.telescope.focus_max_mm
+                    "focus_max_mm": config.telescope.focus_max_mm,
+                    "auto_connect": config.telescope.auto_connect
                 },
                 "camera": {
                     "buffer_size": config.camera.buffer_size,
@@ -954,7 +946,7 @@ class CerberusAPI:
                 "filterwheel": {
                     "library_path": config.filterwheel.library_path,
                     "filters": config.filterwheel.filters,
-                    "focus_offsets_mm": config.filterwheel.focus_offsets_mm
+                    "focus_positions_mm": config.filterwheel.focus_positions_mm
                 },
                 "focusloop": {
                     "start_position_mm": config.focusloop.start_position_mm,
@@ -969,6 +961,7 @@ class CerberusAPI:
                     "plate_scale_arcsec_per_pixel": config.instrument.plate_scale_arcsec_per_pixel,
                     "saturation_level_adu": config.instrument.saturation_level_adu,
                     "min_fwhm_pixels": config.instrument.min_fwhm_pixels,
+                    "fwhm_box_size_pixels": config.instrument.fwhm_box_size_pixels,
                     "timestamp_rollover_threshold": config.instrument.timestamp_rollover_threshold,
                     "framestamp_rollover_threshold": config.instrument.framestamp_rollover_threshold
                 },
@@ -987,6 +980,15 @@ class CerberusAPI:
                     "status_update_interval_ms": config.gui.status_update_interval_ms,
                     "default_object_name": config.gui.default_object_name,
                     "default_focus_display_mm": config.gui.default_focus_display_mm
+                },
+                "guiding": {
+                    "averaging_window_seconds": config.guiding.averaging_window_seconds,
+                    "correction_threshold_arcsec": config.guiding.correction_threshold_arcsec,
+                    "max_correction_arcsec": config.guiding.max_correction_arcsec,
+                    "correction_interval_seconds": config.guiding.correction_interval_seconds,
+                    "guide_gain": config.guiding.guide_gain,
+                    "x_to_ra_sign": config.guiding.x_to_ra_sign,
+                    "y_to_dec_sign": config.guiding.y_to_dec_sign
                 }
             }
 
@@ -1060,12 +1062,22 @@ class CerberusAPI:
 
             results = focus_loop.run()
 
-            # Log results
+            # Log results with old vs new comparison
+            config = get_config()
+            logger.info("=" * 50)
+            logger.info("FOCUS LOOP RESULTS")
+            logger.info("-" * 50)
             for filter_name, result in results.items():
                 if result.success:
-                    fname = filter_name or "single"
-                    logger.info(f"Focus ({fname}): {result.best_focus:.2f} mm, "
-                               f"FWHM: {result.best_fwhm_arcsec:.2f}\"")
+                    fname = filter_name or self._state.current_filter or "unknown"
+                    old_pos = config.get_filter_focus_position(fname)
+                    old_str = f"{old_pos:.2f}" if old_pos is not None else "None"
+                    logger.info(f"  {fname:8s}: old={old_str:>6s} mm -> new={result.best_focus:.2f} mm  "
+                               f"(FWHM: {result.best_fwhm_arcsec:.2f}\")")
+                else:
+                    fname = filter_name or self._state.current_filter or "unknown"
+                    logger.info(f"  {fname:8s}: FAILED")
+            logger.info("=" * 50)
 
             return results
 
@@ -1086,6 +1098,36 @@ class CerberusAPI:
         if hasattr(self, '_focus_loop') and self._focus_loop:
             self._focus_loop.abort()
             logger.info("Focus loop abort requested")
+
+    def save_current_filter_focus(self) -> bool:
+        """
+        Save the current telescope focus position for the current filter.
+
+        Use this after running a focus loop to save the calibrated position.
+
+        Returns:
+            True if successful
+        """
+        if not self._state.telescope_connected:
+            logger.error("Cannot save filter focus: telescope not connected")
+            return False
+
+        current_filter = self._state.current_filter
+        if not current_filter:
+            logger.error("Cannot save filter focus: no filter selected")
+            return False
+
+        current_focus = self.get_focus()
+        if current_focus is None:
+            logger.error("Cannot save filter focus: failed to get current focus")
+            return False
+
+        # Log old vs new
+        old_pos = self.get_filter_focus_position(current_filter)
+        old_str = f"{old_pos:.2f}" if old_pos is not None else "None"
+        logger.info(f"SAVING FILTER FOCUS: {current_filter}: {old_str} mm -> {current_focus:.2f} mm")
+
+        return self.set_filter_focus_position(current_filter, current_focus, save=True)
 
     # ==========================================================================
     # Callbacks
