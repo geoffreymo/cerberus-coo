@@ -129,6 +129,20 @@ class CerberusGUI:
             size=14
         )
 
+        # Also modify TkTextFont for Entry widgets
+        text_font = font.nametofont("TkTextFont")
+        text_font.configure(
+            family="Ubuntu",
+            size=14
+        )
+
+        # Explicitly configure Entry and Combobox fonts
+        style.configure("TEntry", font=("Ubuntu", 14))
+        style.configure("TCombobox", font=("Ubuntu", 14))
+
+        # Configure Combobox dropdown list font (uses Tk option database)
+        self.root.option_add("*TCombobox*Listbox.font", ("Ubuntu", 14))
+
         # Make headings slightly heavier via a named style only
         style.configure(
             "TLabelframe.Label",
