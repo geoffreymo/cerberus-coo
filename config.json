@@ -82,7 +82,8 @@
 
     "paths": {
         "default_output_dir": "/data/cerberus",
-        "focus_output_dir": "/tmp/cerberus_focus"
+        "focus_output_dir": "/tmp/cerberus_focus",
+        "log_dir": "/data/cerberus"
     },
 
     "gui": {

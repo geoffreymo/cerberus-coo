@@ -84,6 +84,7 @@ class PathsConfig:
     """Path configuration."""
     default_output_dir: str = "/data/cerberus"
     focus_output_dir: str = "/tmp/cerberus_focus"
+    log_dir: str = "/data/cerberus"
 
 
 @dataclass

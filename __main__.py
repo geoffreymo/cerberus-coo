@@ -50,18 +50,36 @@ Examples:
 
     args = parser.parse_args()
 
-    # Setup logging
+    # Setup console logging first
     log_level = logging.DEBUG if args.verbose else logging.INFO
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(
         level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format=log_format
     )
 
     # Load config
     from .config import load_config, get_config
+    import os
+    from datetime import datetime
     if args.config:
         load_config(args.config)
     config = get_config()
+
+    # Add file logging
+    log_dir = config.paths.log_dir
+    if log_dir:
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            log_filename = datetime.now().strftime('cerberus_%Y%m%d_%H%M%S.log')
+            log_path = os.path.join(log_dir, log_filename)
+            file_handler = logging.FileHandler(log_path)
+            file_handler.setLevel(log_level)
+            file_handler.setFormatter(logging.Formatter(log_format))
+            logging.getLogger().addHandler(file_handler)
+            logging.info(f"Logging to {log_path}")
+        except Exception as e:
+            logging.warning(f"Could not create log file in {log_dir}: {e}")
 
     if args.no_gui:
         # Just print config and exit
