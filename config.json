@@ -40,20 +40,20 @@
             "7": "OIII"
         },
         "focus_positions_mm": {
-            "clear": 9.83,
-            "u": 10.78,
-            "g": 11.635693848354816,
-            "r": 10.75,
-            "i": 10.89,
-            "z": 11.02,
-            "Ha": 10.84,
-            "OIII": 10.89
+            "clear": 11.587015346788823,
+            "u": 12.00160837836908,
+            "g": 12.247616200601431,
+            "r": 12.479013458303308,
+            "i": 12.558769012971636,
+            "z": 12.607329263522011,
+            "Ha": 12.529449554930109,
+            "OIII": 12.299211332731412
         }
     },
     "focusloop": {
         "start_position_mm": 30.0,
         "end_position_mm": 45.0,
-        "step_size_mm": 2.5,
+        "step_size_mm": 0.25,
         "exposure_time_seconds": 5.0,
         "settle_time_seconds": 2.0,
         "max_fwhm_arcsec": 5.0,
@@ -63,7 +63,7 @@
         "plate_scale_arcsec_per_pixel": 0.051,
         "saturation_level_adu": 60000,
         "min_fwhm_pixels": 5,
-        "fwhm_box_size_arcsec": 4.0,
+        "fwhm_box_size_pixels": 80,
         "timestamp_rollover_threshold": 4000,
         "framestamp_rollover_threshold": 60000
     },

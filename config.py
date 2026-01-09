@@ -51,7 +51,7 @@ class FocusLoopConfig:
     """Focus loop configuration."""
     start_position_mm: float = 30.0
     end_position_mm: float = 45.0
-    step_size_mm: float = 2.5
+    step_size_mm: float = 0.25
     exposure_time_seconds: float = 5.0
     settle_time_seconds: float = 2.0
     max_fwhm_arcsec: float = 5.0
