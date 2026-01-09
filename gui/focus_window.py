@@ -15,17 +15,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Exposure multipliers for different filters
-FILTER_EXPOSURE_MULTIPLIERS = {
-    'Clear': 1.0,
-    'R': 3.0,
-    'G': 3.0,
-    'I': 3.0,
-    'U': 5.0,
-    'Z': 5.0,
-    'Ha': 10.0,
-    'OIII': 10.0,
-}
+def get_filter_exposure_multiplier(filter_name: str) -> float:
+    """Get exposure multiplier for a filter (case-insensitive) from config."""
+    from ..config import get_config
+    config = get_config()
+    multipliers = config.focusloop.exposure_multipliers
+    # Case-insensitive lookup
+    for key, value in multipliers.items():
+        if key.lower() == filter_name.lower():
+            return value
+    return 1.0  # Default if not found
 
 
 # =============================================================================
@@ -464,8 +463,9 @@ class FocusWindow(tk.Toplevel):
             # Create filter-specific exposure times using multipliers
             filter_exposures = {}
             for filter_name in filters:
-                multiplier = FILTER_EXPOSURE_MULTIPLIERS.get(filter_name, 1.0)
+                multiplier = get_filter_exposure_multiplier(filter_name)
                 filter_exposures[filter_name] = base_exposure_sec * multiplier
+                logger.info(f"Filter {filter_name}: {base_exposure_sec}s × {multiplier} = {filter_exposures[filter_name]}s")
 
             config = FocusLoopConfig(
                 start_position=start,
@@ -532,7 +532,7 @@ class FocusWindow(tk.Toplevel):
             # Create filter-specific exposure times
             filter_exposures = {}
             for filter_name in filters:
-                multiplier = FILTER_EXPOSURE_MULTIPLIERS.get(filter_name, 1.0)
+                multiplier = get_filter_exposure_multiplier(filter_name)
                 filter_exposures[filter_name] = base_exposure_sec * multiplier
 
             config = FocusLoopConfig(

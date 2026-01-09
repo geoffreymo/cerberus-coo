@@ -1,13 +1,18 @@
 # gui/panels/focus_panel.py
 """Focus loop controls panel for Cerberus GUI."""
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 import threading
 from typing import TYPE_CHECKING, List
 
+from ..focus_window import get_filter_exposure_multiplier
+
 if TYPE_CHECKING:
     from ...api import CerberusAPI
+
+logger = logging.getLogger(__name__)
 
 
 class FocusPanel(ttk.LabelFrame):
@@ -191,11 +196,19 @@ class FocusPanel(ttk.LabelFrame):
             date_str = time.strftime('%Y_%m_%d')
             output_dir = f"/data/cerberus/captures_{date_str}/focus"
 
+            # Create filter-specific exposure times using multipliers
+            filter_exposures = {}
+            for filter_name in filters:
+                multiplier = get_filter_exposure_multiplier(filter_name)
+                filter_exposures[filter_name] = exposure * multiplier
+                logger.info(f"Filter {filter_name}: {exposure}s × {multiplier} = {filter_exposures[filter_name]}s")
+
             config = FocusLoopConfig(
                 start_position=start,
                 end_position=end,
                 step_size=step,
                 exposure_time=exposure,
+                filter_exposures=filter_exposures,
                 filters=filters,
                 output_dir=output_dir
             )

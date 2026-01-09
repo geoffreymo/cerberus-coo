@@ -60,7 +60,17 @@
         "exposure_time_seconds": 5.0,
         "settle_time_seconds": 2.0,
         "max_fwhm_arcsec": 5.0,
-        "auto_apply_best": true
+        "auto_apply_best": true,
+        "exposure_multipliers": {
+            "clear": 1.0,
+            "r": 3.0,
+            "g": 3.0,
+            "i": 3.0,
+            "u": 10.0,
+            "z": 5.0,
+            "ha": 10.0,
+            "oiii": 10.0
+        }
     },
 
     "instrument": {

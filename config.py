@@ -56,6 +56,17 @@ class FocusLoopConfig:
     settle_time_seconds: float = 2.0
     max_fwhm_arcsec: float = 5.0
     auto_apply_best: bool = True
+    # Exposure multipliers per filter (applied to base exposure time)
+    exposure_multipliers: Dict[str, float] = field(default_factory=lambda: {
+        'clear': 1.0,
+        'r': 3.0,
+        'g': 3.0,
+        'i': 3.0,
+        'u': 10.0,
+        'z': 5.0,
+        'ha': 10.0,
+        'oiii': 10.0,
+    })
 
 
 @dataclass
