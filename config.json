@@ -42,14 +42,14 @@
             "7": "OIII"
         },
         "focus_positions_mm": {
-            "clear": null,
-            "u": null,
-            "g": null,
-            "r": null,
-            "i": null,
-            "z": null,
-            "Ha": null,
-            "OIII": null
+            "clear": 9.83,
+            "u": 10.78,
+            "g": 10.59,
+            "r": 10.75,
+            "i": 10.89,
+            "z": 11.02,
+            "Ha": 10.84,
+            "OIII": 10.89
         }
     },
 

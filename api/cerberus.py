@@ -1069,7 +1069,7 @@ class CerberusAPI:
 
             results = focus_loop.run()
 
-            # Log results with old vs new comparison
+            # Log results with old vs new comparison and save to config
             config = get_config()
             logger.info("=" * 50)
             logger.info("FOCUS LOOP RESULTS")
@@ -1081,10 +1081,16 @@ class CerberusAPI:
                     old_str = f"{old_pos:.2f}" if old_pos is not None else "None"
                     logger.info(f"  {fname:8s}: old={old_str:>6s} mm -> new={result.best_focus:.2f} mm  "
                                f"(FWHM: {result.best_fwhm_arcsec:.2f}\")")
+                    # Save the calibrated focus position
+                    self.set_filter_focus_position(fname, result.best_focus, save=False)
                 else:
                     fname = filter_name or self._state.current_filter or "unknown"
                     logger.info(f"  {fname:8s}: FAILED")
             logger.info("=" * 50)
+
+            # Save all calibrated positions to config file
+            self._save_config()
+            logger.info("Saved calibrated focus positions to config")
 
             return results
 

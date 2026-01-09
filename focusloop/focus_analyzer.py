@@ -113,18 +113,16 @@ class FocusAnalyzer:
 
     def get_fwhm_from_catalog(self, catalog_path: str,
                                saturation: float = SATURATION_LEVEL,
-                               min_fwhm: float = MIN_FWHM_PIXELS,
-                               n_sources: int = 3) -> float:
+                               min_fwhm: float = MIN_FWHM_PIXELS) -> float:
         """
         Extract FWHM from SExtractor catalog.
 
-        Uses median FWHM of top N SNR non-saturated sources with FWHM > min_fwhm.
+        Uses FWHM of the highest SNR non-saturated source with FWHM > min_fwhm.
 
         Args:
             catalog_path: Path to SExtractor catalog
             saturation: Saturation threshold in ADU
             min_fwhm: Minimum FWHM in pixels (filters cosmic rays)
-            n_sources: Number of top SNR sources to use for median
 
         Returns:
             float: FWHM in pixels
@@ -143,12 +141,9 @@ class FocusAnalyzer:
         if len(catalog) == 0:
             raise ValueError("No valid sources found in catalog")
 
-        # Sort by SNR descending
+        # Sort by SNR descending and take the top source
         sorted_catalog = catalog[np.argsort(catalog['SNR_WIN'])[::-1]]
-
-        # Take median of top N sources (or fewer if not enough)
-        n = min(n_sources, len(sorted_catalog))
-        fwhm_pixels = np.median(sorted_catalog['FWHM_IMAGE'][:n])
+        fwhm_pixels = sorted_catalog['FWHM_IMAGE'][0]
 
         return float(fwhm_pixels)
 
