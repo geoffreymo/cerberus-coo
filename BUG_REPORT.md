@@ -8,7 +8,7 @@
 | **CRITICAL** | 2 | Race conditions in hardware layer |
 | **HIGH** | 8 | Thread safety, statistics errors, connection issues |
 | **MEDIUM** | 18 | Thread safety, None checks, error handling |
-| **LOW** | 21 | Minor issues, logging, documentation |
+| **LOW** | 22 | Minor issues, logging, documentation |
 
 ---
 
@@ -389,6 +389,21 @@ Minor inefficiency in list comparison.
 
 ### 43. Bare except: in MockCamera
 **Files:** `gui/focus_window.py:146-148`, `focusloop/test_focus_loop.py:252-256`
+
+---
+
+### 44. Tkinter `after()` Callbacks Not Cancelled on Shutdown
+**Files:** `gui/app.py`, `gui/panels/image_display.py`, `gui/panels/camera_controls.py`
+
+On application shutdown, pending `after()` callbacks try to execute after widgets are destroyed, causing errors like:
+```
+invalid command name "123548904157376<lambda>"
+    while executing
+"123548904157376<lambda>"
+    ("after" script)
+```
+
+**Fix:** Track `after` IDs and cancel them with `after_cancel()` in widget `destroy()` methods.
 
 ---
 

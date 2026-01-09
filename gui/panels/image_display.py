@@ -83,11 +83,12 @@ class ImageDisplayPanel(ttk.LabelFrame):
         from ...config import get_config
         config = get_config()
         self._fwhm_target: Optional[Tuple[int, int]] = None  # Image coordinates of tracked star
-        self._fwhm_box_size = config.instrument.fwhm_box_size_pixels  # Size of cutout for FWHM measurement
+        self._plate_scale = config.instrument.plate_scale_arcsec_per_pixel
+        # Box size in arcseconds (configurable via GUI spinbox)
+        self._fwhm_box_size_arcsec = tk.DoubleVar(value=config.instrument.fwhm_box_size_arcsec)
         self._fwhm_value: Optional[float] = None  # Current FWHM in arcsec
         self._fwhm_history: list = []  # [(timestamp, fwhm_arcsec), ...]
         self._fwhm_history_max = 1000  # Max history entries
-        self._plate_scale = config.instrument.plate_scale_arcsec_per_pixel
         self._fwhm_animation = None  # Matplotlib animation (kept alive to prevent GC)
         self._fwhm_plot_fig = None   # Matplotlib figure reference
 
@@ -135,7 +136,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
         ttk.Label(info_frame, text="Cursor:").pack(side=tk.LEFT, padx=(10, 0))
         ttk.Label(info_frame, textvariable=self.cursor_var, width=8).pack(side=tk.LEFT)
 
-        # FWHM display row
+        # FWHM display row 1
         fwhm_frame = ttk.Frame(self)
         fwhm_frame.pack(fill=tk.X, pady=2)
 
@@ -154,6 +155,13 @@ class ImageDisplayPanel(ttk.LabelFrame):
             width=6
         )
         self.plot_fwhm_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(fwhm_frame, text="Box:").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Spinbox(
+            fwhm_frame, from_=1.0, to=10.0, width=4, increment=0.5,
+            textvariable=self._fwhm_box_size_arcsec, format="%.1f"
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Label(fwhm_frame, text='"').pack(side=tk.LEFT)
 
         ttk.Label(
             fwhm_frame, text="(Right-click on star)",
@@ -262,6 +270,14 @@ class ImageDisplayPanel(ttk.LabelFrame):
             btn_frame, text="Open Display", command=self._toggle_display
         )
         self.display_btn.pack(side=tk.LEFT, padx=2)
+
+    @property
+    def _fwhm_box_size(self) -> int:
+        """Get FWHM box size in pixels (computed from arcsec setting)."""
+        arcsec = self._fwhm_box_size_arcsec.get()
+        pixels = int(arcsec / self._plate_scale)
+        # Ensure even number for symmetric cutout
+        return pixels if pixels % 2 == 0 else pixels + 1
 
     def _toggle_display(self):
         """Toggle display window."""

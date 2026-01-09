@@ -273,7 +273,7 @@ class FocusWindow(tk.Toplevel):
         # Multiplier info
         info_text = ttk.Label(
             exp_frame,
-            text="Multipliers: R/G/I=3x, U/Z=5x, Ha/OIII=10x",
+            text="Multipliers: R/G/I=3x, Z=5x, U/Ha/OIII=10x",
             font=("TkDefaultFont", 9),
             foreground="gray"
         )

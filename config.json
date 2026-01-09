@@ -7,7 +7,6 @@
         "focus_max_mm": 74.0,
         "auto_connect": true
     },
-
     "camera": {
         "buffer_size": 500,
         "defaults": {
@@ -26,9 +25,8 @@
             "HOT_PIXEL_CORRECT_LEVEL": 2.0
         },
         "capture_timeout_ms": 30000,
-        "align_to_second_offset": 0.10
+        "align_to_second_offset": 0.1
     },
-
     "filterwheel": {
         "library_path": "libEFWFilter.so.1.7",
         "filters": {
@@ -44,7 +42,7 @@
         "focus_positions_mm": {
             "clear": 9.83,
             "u": 10.78,
-            "g": 10.59,
+            "g": 11.635693848354816,
             "r": 10.75,
             "i": 10.89,
             "z": 11.02,
@@ -52,7 +50,6 @@
             "OIII": 10.89
         }
     },
-
     "focusloop": {
         "start_position_mm": 30.0,
         "end_position_mm": 45.0,
@@ -60,28 +57,16 @@
         "exposure_time_seconds": 5.0,
         "settle_time_seconds": 2.0,
         "max_fwhm_arcsec": 5.0,
-        "auto_apply_best": true,
-        "exposure_multipliers": {
-            "clear": 1.0,
-            "r": 3.0,
-            "g": 3.0,
-            "i": 3.0,
-            "u": 10.0,
-            "z": 5.0,
-            "ha": 10.0,
-            "oiii": 10.0
-        }
+        "auto_apply_best": true
     },
-
     "instrument": {
         "plate_scale_arcsec_per_pixel": 0.051,
         "saturation_level_adu": 60000,
         "min_fwhm_pixels": 5,
-        "fwhm_box_size_pixels": 80,
+        "fwhm_box_size_arcsec": 4.0,
         "timestamp_rollover_threshold": 4000,
         "framestamp_rollover_threshold": 60000
     },
-
     "acquisition": {
         "max_queue_size": 10000,
         "max_pending_writes": 6,
@@ -89,19 +74,15 @@
         "thread_pool_workers": 8,
         "backpressure_threshold": 0.9
     },
-
     "paths": {
         "default_output_dir": "/data/cerberus",
-        "focus_output_dir": "/tmp/cerberus_focus",
-        "log_dir": "/data/cerberus"
+        "focus_output_dir": "/tmp/cerberus_focus"
     },
-
     "gui": {
         "status_update_interval_ms": 1000,
         "default_object_name": "Object",
         "default_focus_display_mm": 35.0
     },
-
     "guiding": {
         "averaging_window_seconds": 15.0,
         "correction_threshold_arcsec": 0.1,

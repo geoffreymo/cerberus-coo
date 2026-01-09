@@ -75,7 +75,8 @@ class InstrumentConfig:
     plate_scale_arcsec_per_pixel: float = 0.051
     saturation_level_adu: int = 60000
     min_fwhm_pixels: int = 5
-    fwhm_box_size_pixels: int = 80
+    fwhm_box_size_pixels: int = 80  # Deprecated: use fwhm_box_size_arcsec instead
+    fwhm_box_size_arcsec: float = 4.0  # Size of cutout for FWHM/guiding (in arcseconds)
     timestamp_rollover_threshold: int = 4000
     framestamp_rollover_threshold: int = 60000
 
