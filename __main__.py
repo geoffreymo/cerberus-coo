@@ -2,16 +2,35 @@
 """
 Cerberus High-Speed Imager - Main Entry Point
 
-Launch the GUI:
+Launch the GUI (controls all connected cameras):
     python -m cerberus_coo
 
-Or from the cerberus directory:
-    python -m cerberus_coo
+List available cameras:
+    python -m cerberus_coo --list-cameras
 """
 
 import sys
 import argparse
 import logging
+from typing import List, Tuple
+
+
+def enumerate_cameras() -> List[Tuple[int, str]]:
+    """
+    Enumerate all connected cameras.
+
+    Returns:
+        List of (camera_index, camera_id) tuples
+    """
+    from .hardware.dcam import Dcamapi, Dcam, DCAM_IDSTR
+
+    cameras = []
+    count = Dcamapi.get_devicecount()
+    for i in range(count):
+        dcam = Dcam(i)
+        camera_id = dcam.dev_getstring(DCAM_IDSTR.CAMERAID)
+        cameras.append((i, camera_id))
+    return cameras
 
 
 def main():
@@ -20,7 +39,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python -m cerberus_coo              # Launch GUI
+    python -m cerberus_coo              # Launch GUI (all cameras)
+    python -m cerberus_coo --list-cameras  # List available cameras
     python -m cerberus_coo --sim        # Launch GUI with focus loop simulation mode
     python -m cerberus_coo --no-gui     # Print config and exit (for testing)
     python -m cerberus_coo --verbose    # Launch GUI with debug logging
@@ -47,10 +67,44 @@ Examples:
         action='store_true',
         help='Enable simulation mode for focus loop testing (simulates telescope/camera)'
     )
+    parser.add_argument(
+        '--list-cameras',
+        action='store_true',
+        help='List available cameras and exit'
+    )
 
     args = parser.parse_args()
 
-    # Setup console logging first
+    # Initialize DCAM API once at startup
+    from .hardware.dcam import Dcamapi, Dcam, DCAM_IDSTR
+
+    if not Dcamapi.init():
+        print("Failed to initialize DCAM API")
+        return 1
+
+    # Handle --list-cameras
+    if args.list_cameras:
+        count = Dcamapi.get_devicecount()
+        if count == 0:
+            print("No cameras found")
+        else:
+            print(f"Found {count} camera(s):")
+            for i in range(count):
+                dcam = Dcam(i)
+                model = dcam.dev_getstring(DCAM_IDSTR.MODEL)
+                camera_id = dcam.dev_getstring(DCAM_IDSTR.CAMERAID)
+                print(f"  #{i}: MODEL={model}, CAMERAID={camera_id}")
+        Dcamapi.uninit()
+        return 0
+
+    # Enumerate cameras
+    cameras = enumerate_cameras()
+    if not cameras:
+        print("No cameras found")
+        Dcamapi.uninit()
+        return 1
+
+    # Setup console logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(
@@ -81,20 +135,30 @@ Examples:
         except Exception as e:
             logging.warning(f"Could not create log file in {log_dir}: {e}")
 
+    logging.info(f"Found {len(cameras)} camera(s): {[c[1] for c in cameras]}")
+
     if args.no_gui:
         # Just print config and exit
         print("Cerberus Configuration:")
+        print(f"  Cameras: {[c[1] for c in cameras]}")
         print(f"  Telescope: {config.telescope.host}:{config.telescope.port}")
         print(f"  Filters: {list(config.filterwheel.filters.values())}")
         print(f"  Frames per cube: {config.acquisition.frames_per_cube}")
         print(f"  Output dir: {config.paths.default_output_dir}")
         print("\nConfig loaded successfully!")
+        Dcamapi.uninit()
         return 0
 
-    # Launch GUI
+    # Launch GUI with all cameras
     from .gui.app import CerberusGUI
-    gui = CerberusGUI(enable_simulation=args.sim)
+    gui = CerberusGUI(
+        cameras=cameras,
+        enable_simulation=args.sim
+    )
     gui.run()
+
+    # Cleanup DCAM API on exit
+    Dcamapi.uninit()
     return 0
 
 

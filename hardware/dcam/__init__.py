@@ -5,6 +5,7 @@ Low-level interface to Hamamatsu DCAM API for camera control.
 """
 
 from .dcam import Dcam, Dcamapi
+from .dcamapi4 import DCAM_IDSTR
 from .params import CAMERA_PARAMS, DISPLAY_PARAMS
 
-__all__ = ['Dcam', 'Dcamapi', 'CAMERA_PARAMS', 'DISPLAY_PARAMS']
+__all__ = ['Dcam', 'Dcamapi', 'DCAM_IDSTR', 'CAMERA_PARAMS', 'DISPLAY_PARAMS']
