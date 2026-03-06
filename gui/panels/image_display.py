@@ -767,6 +767,18 @@ class ImageDisplayPanel(ttk.LabelFrame):
         if not self._running:
             return
 
+        # Check if this panel's tab is currently visible
+        # If not, use a much longer delay to reduce event loop pressure
+        try:
+            if not self.winfo_viewable():
+                # Tab is hidden - use very long delay (500ms) to reduce load
+                if self._running:
+                    self._after_id = self.after(500, self._display_loop)
+                return
+        except tk.TclError:
+            # Widget being destroyed
+            return
+
         # CRITICAL: Non-blocking lock prevents display update pileup
         # If previous update still processing, skip this frame (like v18 GUI)
         if not self._display_lock.acquire(blocking=False):
