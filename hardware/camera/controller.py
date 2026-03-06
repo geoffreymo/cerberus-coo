@@ -30,29 +30,52 @@ logger = logging.getLogger(__name__)
 
 
 class DCamLock:
-    """Thread-safe locking for DCAM operations."""
-    _capture_lock = threading.RLock()
-    _property_lock = threading.RLock()
+    """
+    Thread-safe locking for DCAM operations.
+
+    Uses per-camera locks to allow concurrent operations on different cameras.
+    """
+    _capture_locks: Dict[int, threading.RLock] = {}
+    _property_locks: Dict[int, threading.RLock] = {}
+    _lock_creation = threading.Lock()
 
     @classmethod
-    def acquire_capture(cls, timeout=5.0):
-        return cls._capture_lock.acquire(blocking=True, timeout=timeout)
+    def _get_capture_lock(cls, camera_index: int) -> threading.RLock:
+        """Get or create capture lock for a camera."""
+        if camera_index not in cls._capture_locks:
+            with cls._lock_creation:
+                if camera_index not in cls._capture_locks:
+                    cls._capture_locks[camera_index] = threading.RLock()
+        return cls._capture_locks[camera_index]
 
     @classmethod
-    def release_capture(cls):
+    def _get_property_lock(cls, camera_index: int) -> threading.RLock:
+        """Get or create property lock for a camera."""
+        if camera_index not in cls._property_locks:
+            with cls._lock_creation:
+                if camera_index not in cls._property_locks:
+                    cls._property_locks[camera_index] = threading.RLock()
+        return cls._property_locks[camera_index]
+
+    @classmethod
+    def acquire_capture(cls, camera_index: int = 0, timeout: float = 5.0) -> bool:
+        return cls._get_capture_lock(camera_index).acquire(blocking=True, timeout=timeout)
+
+    @classmethod
+    def release_capture(cls, camera_index: int = 0):
         try:
-            cls._capture_lock.release()
+            cls._get_capture_lock(camera_index).release()
         except RuntimeError:
             pass
 
     @classmethod
-    def acquire_property(cls, timeout=2.0):
-        return cls._property_lock.acquire(blocking=True, timeout=timeout)
+    def acquire_property(cls, camera_index: int = 0, timeout: float = 2.0) -> bool:
+        return cls._get_property_lock(camera_index).acquire(blocking=True, timeout=timeout)
 
     @classmethod
-    def release_property(cls):
+    def release_property(cls, camera_index: int = 0):
         try:
-            cls._property_lock.release()
+            cls._get_property_lock(camera_index).release()
         except RuntimeError:
             pass
 
@@ -72,6 +95,9 @@ class CameraController:
         config = get_config()
         self.buffer_size = config.camera.buffer_size
         self._settings = config.camera.defaults.copy()
+
+        # Camera index (set in connect())
+        self._camera_index: int = 0
 
         # DCAM handle (only accessed from camera thread)
         self.dcam: Optional[Dcam] = None
@@ -192,32 +218,30 @@ class CameraController:
             self._cleanup()
 
     def _connect_camera(self) -> bool:
-        """Connect to camera (called from camera thread)."""
+        """Connect to camera (called from camera thread).
+
+        Note: Dcamapi.init() is called once at application startup in __main__.py,
+        so we don't need to init/uninit here.
+        """
         retry_count = 0
         max_retries = 3
 
         while self._running and retry_count < max_retries:
             retry_count += 1
-            logger.info(f"Camera connection attempt {retry_count}")
+            logger.info(f"Camera {self._camera_index} connection attempt {retry_count}")
 
             try:
-                # Initialize DCAM API
-                if Dcamapi.init():
-                    logger.info("DCAM API initialized")
-                else:
-                    raise RuntimeError(f"DCAM API init failed: {Dcamapi.lasterr()}")
-
-                # Open camera device
+                # Open camera device (DCAM API already initialized at startup)
                 self.dcam = Dcam(self._camera_index)
                 if not self.dcam.dev_open():
                     raise RuntimeError(f"Device open failed: {self.dcam.lasterr()}")
 
-                logger.info("Camera connected successfully")
+                logger.info(f"Camera {self._camera_index} connected successfully")
                 self._apply_defaults()
                 self._update_camera_params()
 
                 # Log all camera properties at debug level
-                logger.debug("=== CAMERA PROPERTIES ===")
+                logger.debug(f"=== CAMERA {self._camera_index} PROPERTIES ===")
                 with self._params_lock:
                     for prop_name in sorted(self._camera_params.keys()):
                         logger.debug(f"  {prop_name}: {self._camera_params[prop_name]}")
@@ -230,8 +254,7 @@ class CameraController:
                 return True
 
             except Exception as e:
-                logger.warning(f"Failed to open camera: {e}")
-                Dcamapi.uninit()
+                logger.warning(f"Failed to open camera {self._camera_index}: {e}")
                 time.sleep(2)
 
         return False
@@ -259,7 +282,7 @@ class CameraController:
 
         timeout_ms = 10  # 10ms
 
-        if not DCamLock.acquire_capture(timeout=0.005):
+        if not DCamLock.acquire_capture(self._camera_index, timeout=0.005):
             return
 
         lock_released = False
@@ -277,7 +300,7 @@ class CameraController:
                     frame_copy = np.copy(npBuf)
 
                     # Release lock before processing so other threads can access DCAM
-                    DCamLock.release_capture()
+                    DCamLock.release_capture(self._camera_index)
                     lock_released = True
 
                     # Process frame (outside lock)
@@ -286,7 +309,7 @@ class CameraController:
 
         finally:
             if not lock_released:
-                DCamLock.release_capture()
+                DCamLock.release_capture(self._camera_index)
 
     def _process_frame(self, frame: np.ndarray, timestamp, framestamp: int):
         """Process frame (matches cerberus_gui_test.py exactly)."""
@@ -351,7 +374,7 @@ class CameraController:
 
         self._stop_requested.clear()
 
-        if not DCamLock.acquire_capture(timeout=3.0):
+        if not DCamLock.acquire_capture(self._camera_index, timeout=3.0):
             logger.error("Failed to acquire lock")
             return False
 
@@ -415,7 +438,7 @@ class CameraController:
             return True
 
         finally:
-            DCamLock.release_capture()
+            DCamLock.release_capture(self._camera_index)
 
     def stop_streaming(self) -> bool:
         """Stop capture."""
@@ -424,11 +447,11 @@ class CameraController:
         self._stop_requested.set()
         time.sleep(0.2)
 
-        if DCamLock.acquire_capture(timeout=2.0):
+        if DCamLock.acquire_capture(self._camera_index, timeout=2.0):
             try:
                 result = self._stop_capture_internal()
             finally:
-                DCamLock.release_capture()
+                DCamLock.release_capture(self._camera_index)
         else:
             result = self._stop_capture_internal(force=True)
 
@@ -461,9 +484,9 @@ class CameraController:
 
     def _warmup_capture(self):
         """Perform warmup capture (in camera thread)."""
-        logger.info("Performing warmup capture...")
+        logger.info(f"Performing warmup capture for camera {self._camera_index}...")
 
-        if not DCamLock.acquire_capture(timeout=3.0):
+        if not DCamLock.acquire_capture(self._camera_index, timeout=3.0):
             logger.warning("Could not acquire lock for warmup")
             return
 
@@ -497,13 +520,17 @@ class CameraController:
         except Exception as e:
             logger.error(f"Error during warmup: {e}")
         finally:
-            DCamLock.release_capture()
+            DCamLock.release_capture(self._camera_index)
 
     # === Cleanup ===
 
     def _cleanup(self):
-        """Clean up resources (called from camera thread)."""
-        logger.info("Camera thread cleanup starting")
+        """Clean up resources (called from camera thread).
+
+        Note: Dcamapi.uninit() is called once at application shutdown in __main__.py,
+        so we only close the individual camera device here.
+        """
+        logger.info(f"Camera {self._camera_index} thread cleanup starting")
 
         self._running = False
         self._stop_requested.set()
@@ -517,19 +544,13 @@ class CameraController:
         if self.dcam is not None:
             try:
                 self.dcam.dev_close()
-                logger.info("Camera device closed")
+                logger.info(f"Camera {self._camera_index} device closed")
             except Exception as e:
-                logger.error(f"Error closing camera: {e}")
+                logger.error(f"Error closing camera {self._camera_index}: {e}")
             self.dcam = None
 
-        try:
-            Dcamapi.uninit()
-            logger.info("DCAM API uninitialized")
-        except Exception as e:
-            logger.error(f"Error uninitializing DCAM: {e}")
-
         self.is_connected = False
-        logger.info("Camera thread cleanup complete")
+        logger.info(f"Camera {self._camera_index} thread cleanup complete")
 
     # === Properties ===
 
@@ -539,7 +560,7 @@ class CameraController:
             logger.error(f"Unknown property: {prop_name}")
             return False
 
-        if not DCamLock.acquire_property(timeout=1.0):
+        if not DCamLock.acquire_property(self._camera_index, timeout=1.0):
             logger.error(f"Failed to acquire property lock for {prop_name}")
             return False
 
@@ -554,14 +575,14 @@ class CameraController:
                 logger.error(f"Failed to set {prop_name}: {self.dcam.lasterr()}")
                 return False
         finally:
-            DCamLock.release_property()
+            DCamLock.release_property(self._camera_index)
 
     def get_property(self, prop_name: str) -> Optional[float]:
         """Get camera property value."""
         if prop_name not in CAMERA_PARAMS:
             return None
 
-        if not DCamLock.acquire_property(timeout=1.0):
+        if not DCamLock.acquire_property(self._camera_index, timeout=1.0):
             return None
 
         try:
@@ -571,7 +592,7 @@ class CameraController:
             value = self.dcam.prop_getvalue(CAMERA_PARAMS[prop_name])
             return value if value is not False else None
         finally:
-            DCamLock.release_property()
+            DCamLock.release_property(self._camera_index)
 
     def set_exposure(self, seconds: float) -> bool:
         """Set exposure time in seconds."""
@@ -634,7 +655,7 @@ class CameraController:
             logger.error("Cannot capture single while streaming")
             return None
 
-        if not DCamLock.acquire_capture(timeout=5.0):
+        if not DCamLock.acquire_capture(self._camera_index, timeout=5.0):
             logger.error("Failed to acquire capture lock")
             return None
 
@@ -669,7 +690,7 @@ class CameraController:
                 self.dcam.buf_release()
 
         finally:
-            DCamLock.release_capture()
+            DCamLock.release_capture(self._camera_index)
 
     def save_fits(self, data: np.ndarray, filepath: str,
                   header_extra: dict = None, object_name: str = None):
@@ -728,7 +749,7 @@ class CameraController:
 
     def _update_camera_params(self):
         """Update cached camera parameters."""
-        if not DCamLock.acquire_property(timeout=1.0):
+        if not DCamLock.acquire_property(self._camera_index, timeout=1.0):
             return
 
         try:
@@ -747,7 +768,7 @@ class CameraController:
                             self._camera_params[propname] = valuetext or propvalue
                     idprop = self.dcam.prop_getnextid(idprop)
         finally:
-            DCamLock.release_property()
+            DCamLock.release_property(self._camera_index)
 
     def _reset_trigger_state(self):
         """Restore trigger state after cap_stop()."""
