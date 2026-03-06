@@ -338,8 +338,16 @@ class CerberusGUI:
             self._camera_settings_window.focus()
             return
 
-        # Create new camera settings window
-        self._camera_settings_window = CameraSettingsWindow(self.root, self.api)
+        # Create new camera settings window with cameras list
+        self._camera_settings_window = CameraSettingsWindow(self.root, self.api, cameras=self.cameras)
+
+        # Set to currently selected tab's camera
+        current_tab_index = self.notebook.index(self.notebook.select())
+        if current_tab_index < len(self.cameras):
+            camera_index, camera_id = self.cameras[current_tab_index]
+            self._camera_settings_window.camera_index = camera_index
+            self._camera_settings_window.camera_var.set(camera_id)
+
         self._camera_settings_window.update_from_state(self.api.state)
 
     def _open_telescope_settings_window(self):

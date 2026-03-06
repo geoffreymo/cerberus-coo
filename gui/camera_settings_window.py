@@ -4,7 +4,7 @@
 import tkinter as tk
 from tkinter import ttk
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Tuple
 
 if TYPE_CHECKING:
     from ..api import CerberusAPI
@@ -19,12 +19,22 @@ class CameraSettingsWindow(tk.Toplevel):
     Includes dropdowns for common settings and a full list of all parameters.
     """
 
-    def __init__(self, parent, api: 'CerberusAPI'):
+    def __init__(self, parent, api: 'CerberusAPI', cameras: List[Tuple[int, str]] = None):
         super().__init__(parent)
         self.api = api
+
+        # Get camera list from API if not provided
+        if cameras is None:
+            cameras = api.get_cameras()
+        self.cameras = cameras
+
+        # Track selected camera
+        self.camera_index = cameras[0][0] if cameras else 0
+        self.camera_var = tk.StringVar(value=cameras[0][1] if cameras else "Camera 0")
+
         self.title("Camera Settings")
-        self.geometry("550x700")
-        self.minsize(500, 600)
+        self.geometry("550x750")
+        self.minsize(500, 650)
 
         # Variables for settings
         self.binning_var = tk.StringVar(value="1x1")
@@ -45,7 +55,24 @@ class CameraSettingsWindow(tk.Toplevel):
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Settings frame at top
+        # Camera selector at top
+        camera_frame = ttk.Frame(main_frame)
+        camera_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(camera_frame, text="Camera:", font=('TkDefaultFont', 12, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
+        camera_values = [cam_id for _, cam_id in self.cameras]
+        self.camera_combo = ttk.Combobox(
+            camera_frame, textvariable=self.camera_var, width=15, state="readonly",
+            values=camera_values
+        )
+        self.camera_combo.pack(side=tk.LEFT)
+        self.camera_combo.bind("<<ComboboxSelected>>", self._on_camera_change)
+
+        # Connection status label
+        self.status_label = ttk.Label(camera_frame, text="", foreground="gray")
+        self.status_label.pack(side=tk.LEFT, padx=(20, 0))
+
+        # Settings frame
         settings_frame = ttk.LabelFrame(main_frame, text="Settings", padding=5)
         settings_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -140,85 +167,114 @@ class CameraSettingsWindow(tk.Toplevel):
         btn_frame.pack(fill=tk.X, pady=(10, 0))
         ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side=tk.RIGHT)
 
+    def _on_camera_change(self, event=None):
+        """Handle camera selection change."""
+        selected_id = self.camera_var.get()
+        for idx, cam_id in self.cameras:
+            if cam_id == selected_id:
+                self.camera_index = idx
+                break
+        # Refresh display for new camera
+        self.update_from_state(self.api.state)
+
     def _on_binning_change(self, event=None):
         """Handle binning change."""
-        if not self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if not cam_state.connected:
             return
         try:
             value = self.binning_var.get()
             binning_map = {"1x1": 1, "2x2": 2, "4x4": 4}
             if value in binning_map:
-                self.api.set_binning(binning_map[value])
+                self.api.set_camera_property("BINNING", float(binning_map[value]), camera_index=self.camera_index)
         except Exception as e:
             logger.error(f"Failed to set binning: {e}")
 
     def _on_sensor_mode_change(self, event=None):
         """Handle sensor mode change."""
-        if not self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if not cam_state.connected:
             return
         try:
             value = self.sensor_mode_var.get()
             mode_map = {"Standard": 1.0, "Photon Number": 12.0}
             if value in mode_map:
-                self.api.set_camera_property("SENSOR_MODE", mode_map[value])
+                self.api.set_camera_property("SENSOR_MODE", mode_map[value], camera_index=self.camera_index)
         except Exception as e:
             logger.error(f"Failed to set sensor mode: {e}")
 
     def _on_trigger_source_change(self, event=None):
         """Handle trigger source change."""
-        if not self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if not cam_state.connected:
             return
         try:
             value = self.trigger_source_var.get()
             source_map = {"Internal": 1.0, "External": 2.0, "Software": 3.0}
             if value in source_map:
-                self.api.set_camera_property("TRIGGER_SOURCE", source_map[value])
+                self.api.set_camera_property("TRIGGER_SOURCE", source_map[value], camera_index=self.camera_index)
         except Exception as e:
             logger.error(f"Failed to set trigger source: {e}")
 
     def _on_trigger_mode_change(self, event=None):
         """Handle trigger mode change."""
-        if not self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if not cam_state.connected:
             return
         try:
             value = self.trigger_mode_var.get()
             mode_map = {"Normal": 1.0, "Start": 6.0}
             if value in mode_map:
-                self.api.set_camera_property("TRIGGER_MODE", mode_map[value])
+                self.api.set_camera_property("TRIGGER_MODE", mode_map[value], camera_index=self.camera_index)
         except Exception as e:
             logger.error(f"Failed to set trigger mode: {e}")
 
     def _on_defect_correct_change(self, event=None):
         """Handle defect correction change."""
-        if not self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if not cam_state.connected:
             return
         try:
             value = self.defect_correct_var.get()
             mode_map = {"OFF": 1.0, "ON": 2.0}
             if value in mode_map:
-                self.api.set_camera_property("DEFECT_CORRECT_MODE", mode_map[value])
+                self.api.set_camera_property("DEFECT_CORRECT_MODE", mode_map[value], camera_index=self.camera_index)
         except Exception as e:
             logger.error(f"Failed to set defect correction: {e}")
 
     def _on_hot_pixel_change(self, event=None):
         """Handle hot pixel level change."""
-        if not self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if not cam_state.connected:
             return
         try:
             value = self.hot_pixel_var.get()
             level_map = {"STANDARD": 1.0, "MINIMUM": 2.0, "AGGRESSIVE": 3.0}
             if value in level_map:
-                self.api.set_camera_property("HOT_PIXEL_CORRECT_LEVEL", level_map[value])
+                self.api.set_camera_property("HOT_PIXEL_CORRECT_LEVEL", level_map[value], camera_index=self.camera_index)
         except Exception as e:
             logger.error(f"Failed to set hot pixel level: {e}")
 
     def update_from_state(self, state):
         """Update window from system state."""
-        if not state.camera_connected or not state.camera_params:
+        # Get state for selected camera
+        cam_state = state.get_camera(self.camera_index)
+
+        # Update status label
+        if cam_state.connected:
+            self.status_label.config(text="Connected", foreground="green")
+        else:
+            self.status_label.config(text="Disconnected", foreground="gray")
+            # Clear params tree when not connected
+            for item in self.params_tree.get_children():
+                self.params_tree.delete(item)
+            return
+
+        if not cam_state.params:
             return
 
         try:
-            params = state.camera_params
+            params = cam_state.params
 
             # Update dropdowns
             self._update_dropdowns(params)
