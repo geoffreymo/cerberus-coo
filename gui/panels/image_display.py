@@ -767,14 +767,10 @@ class ImageDisplayPanel(ttk.LabelFrame):
         if not self._running:
             return
 
-        # Check if this panel's tab is currently visible
-        # If not, use a much longer delay to reduce event loop pressure
+        # Check if this panel's tab is currently visible (for Tkinter widget updates)
+        tab_visible = True
         try:
-            if not self.winfo_viewable():
-                # Tab is hidden - use very long delay (500ms) to reduce load
-                if self._running:
-                    self._after_id = self.after(500, self._display_loop)
-                return
+            tab_visible = self.winfo_viewable()
         except tk.TclError:
             # Widget being destroyed
             return
@@ -805,7 +801,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
             # Display frame if we got one
             if frame is not None:
                 self._last_frame = frame
-                self._update_stats(frame)
+                # Only update Tkinter stats widgets if tab is visible
+                if tab_visible:
+                    self._update_stats(frame)
 
                 # Scale frame for display (contrast)
                 display_frame = self._scale_frame(frame)
@@ -855,8 +853,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 # Show frame (running in main thread - no deadlock!)
                 cv2.imshow(self._window_name, display_frame)
 
-                # Update cursor value from mouse position
-                self._update_cursor_value(frame)
+                # Update cursor value from mouse position (only if tab visible)
+                if tab_visible:
+                    self._update_cursor_value(frame)
 
             # Handle OpenCV events
             key = cv2.waitKey(1) & 0xFF
@@ -869,9 +868,12 @@ class ImageDisplayPanel(ttk.LabelFrame):
         finally:
             self._display_lock.release()
 
-        # Schedule next update (~50 Hz like v18 GUI)
+        # Schedule next update
+        # Use longer delay (100ms) when tab is hidden to reduce event pressure
+        # but still keep OpenCV windows updating smoothly
         if self._running:
-            self._after_id = self.after(50, self._display_loop)
+            delay = 100 if not tab_visible else 50
+            self._after_id = self.after(delay, self._display_loop)
 
     def _scale_frame(self, frame: np.ndarray) -> np.ndarray:
         """Scale frame for display."""
