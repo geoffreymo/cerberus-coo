@@ -15,6 +15,39 @@ class ConnectionState(Enum):
 
 
 @dataclass
+class CameraState:
+    """
+    State for a single camera.
+
+    Each camera has its own independent state for streaming, saving, etc.
+    """
+    # Camera identification
+    index: int = 0
+    camera_id: str = ""
+
+    # Connection and streaming
+    connected: bool = False
+    streaming: bool = False
+
+    # Camera parameters
+    exposure: Optional[float] = None
+    temperature: Optional[float] = None
+    frame_rate: Optional[float] = None
+    params: Dict[str, Any] = field(default_factory=dict)
+
+    # Frame counters
+    frames_captured: int = 0
+    frames_saved: int = 0
+    frames_dropped: int = 0
+    cubes_saved: int = 0
+
+    # Acquisition state
+    is_saving: bool = False
+    save_object_name: Optional[str] = None
+    save_output_dir: Optional[str] = None
+
+
+@dataclass
 class SystemState:
     """
     Current state of the Cerberus system.
@@ -24,16 +57,10 @@ class SystemState:
     monitor system status.
     """
 
-    # Camera state
-    camera_connected: bool = False
-    camera_streaming: bool = False
-    camera_exposure: Optional[float] = None
-    camera_temperature: Optional[float] = None
-    camera_frame_rate: Optional[float] = None
-    camera_frames_captured: int = 0
-    camera_params: Dict[str, Any] = field(default_factory=dict)
+    # Per-camera state (keyed by camera index)
+    cameras: Dict[int, CameraState] = field(default_factory=dict)
 
-    # Telescope state (from get_position)
+    # Telescope state (shared across all cameras)
     telescope_connected: bool = False
     telescope_focus: Optional[float] = None
     telescope_ra: Optional[str] = None
@@ -54,18 +81,10 @@ class SystemState:
     telescope_cass_ring_angle: Optional[float] = None
     telescope_id: Optional[str] = None
 
-    # Filter wheel state
+    # Filter wheel state (shared across all cameras)
     filterwheel_connected: bool = False
     current_filter: Optional[str] = None
     available_filters: list = field(default_factory=list)
-
-    # Acquisition state
-    is_saving: bool = False
-    save_object_name: Optional[str] = None
-    save_output_dir: Optional[str] = None
-    frames_saved: int = 0
-    frames_dropped: int = 0
-    cubes_saved: int = 0
 
     # Focus loop state
     focus_loop_running: bool = False
@@ -76,17 +95,118 @@ class SystemState:
     last_error: Optional[str] = None
     errors: list = field(default_factory=list)
 
+    # --- Convenience properties for backward compatibility ---
+
+    def get_camera(self, index: int) -> CameraState:
+        """Get camera state by index, creating if needed."""
+        if index not in self.cameras:
+            self.cameras[index] = CameraState(index=index)
+        return self.cameras[index]
+
+    @property
+    def camera_connected(self) -> bool:
+        """True if any camera is connected (backward compat)."""
+        return any(cam.connected for cam in self.cameras.values())
+
+    @property
+    def camera_streaming(self) -> bool:
+        """True if any camera is streaming (backward compat)."""
+        return any(cam.streaming for cam in self.cameras.values())
+
+    @property
+    def is_saving(self) -> bool:
+        """True if any camera is saving (backward compat)."""
+        return any(cam.is_saving for cam in self.cameras.values())
+
+    @property
+    def camera_exposure(self) -> Optional[float]:
+        """Exposure of first connected camera (backward compat)."""
+        for cam in self.cameras.values():
+            if cam.connected and cam.exposure is not None:
+                return cam.exposure
+        return None
+
+    @property
+    def camera_temperature(self) -> Optional[float]:
+        """Temperature of first connected camera (backward compat)."""
+        for cam in self.cameras.values():
+            if cam.connected and cam.temperature is not None:
+                return cam.temperature
+        return None
+
+    @property
+    def camera_frame_rate(self) -> Optional[float]:
+        """Frame rate of first connected camera (backward compat)."""
+        for cam in self.cameras.values():
+            if cam.connected and cam.frame_rate is not None:
+                return cam.frame_rate
+        return None
+
+    @property
+    def camera_frames_captured(self) -> int:
+        """Total frames captured across all cameras (backward compat)."""
+        return sum(cam.frames_captured for cam in self.cameras.values())
+
+    @property
+    def frames_saved(self) -> int:
+        """Total frames saved across all cameras (backward compat)."""
+        return sum(cam.frames_saved for cam in self.cameras.values())
+
+    @property
+    def frames_dropped(self) -> int:
+        """Total frames dropped across all cameras (backward compat)."""
+        return sum(cam.frames_dropped for cam in self.cameras.values())
+
+    @property
+    def cubes_saved(self) -> int:
+        """Total cubes saved across all cameras (backward compat)."""
+        return sum(cam.cubes_saved for cam in self.cameras.values())
+
+    @property
+    def camera_params(self) -> Dict[str, Any]:
+        """Params of first connected camera (backward compat)."""
+        for cam in self.cameras.values():
+            if cam.connected:
+                return cam.params
+        return {}
+
+    @property
+    def save_object_name(self) -> Optional[str]:
+        """Object name from first saving camera (backward compat)."""
+        for cam in self.cameras.values():
+            if cam.is_saving and cam.save_object_name:
+                return cam.save_object_name
+        return None
+
+    @property
+    def save_output_dir(self) -> Optional[str]:
+        """Output dir from first saving camera (backward compat)."""
+        for cam in self.cameras.values():
+            if cam.is_saving and cam.save_output_dir:
+                return cam.save_output_dir
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert state to dictionary."""
+        cameras_dict = {}
+        for idx, cam in self.cameras.items():
+            cameras_dict[idx] = {
+                'index': cam.index,
+                'camera_id': cam.camera_id,
+                'connected': cam.connected,
+                'streaming': cam.streaming,
+                'exposure': cam.exposure,
+                'temperature': cam.temperature,
+                'frame_rate': cam.frame_rate,
+                'frames_captured': cam.frames_captured,
+                'is_saving': cam.is_saving,
+                'frames_saved': cam.frames_saved,
+                'frames_dropped': cam.frames_dropped,
+                'cubes_saved': cam.cubes_saved,
+            }
+
         return {
-            'camera': {
-                'connected': self.camera_connected,
-                'streaming': self.camera_streaming,
-                'exposure': self.camera_exposure,
-                'temperature': self.camera_temperature,
-                'frame_rate': self.camera_frame_rate,
-                'frames_captured': self.camera_frames_captured,
-            },
+            'cameras': cameras_dict,
             'telescope': {
                 'connected': self.telescope_connected,
                 'focus': self.telescope_focus,
@@ -110,14 +230,6 @@ class SystemState:
                 'connected': self.filterwheel_connected,
                 'current_filter': self.current_filter,
                 'available_filters': self.available_filters,
-            },
-            'acquisition': {
-                'saving': self.is_saving,
-                'object_name': self.save_object_name,
-                'output_dir': self.save_output_dir,
-                'frames_saved': self.frames_saved,
-                'frames_dropped': self.frames_dropped,
-                'cubes_saved': self.cubes_saved,
             },
             'focus_loop': {
                 'running': self.focus_loop_running,
