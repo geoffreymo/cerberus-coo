@@ -15,7 +15,7 @@ from ..hardware.camera import CameraController
 from ..hardware.telescope import TelescopeController
 from ..acquisition.save_thread import OptimizedSaveThread
 from ..config import get_config
-from .state import SystemState
+from .state import SystemState, CameraState
 
 logger = logging.getLogger(__name__)
 
@@ -71,34 +71,69 @@ class CerberusAPI:
         api.disconnect_telescope()
     """
 
-    def __init__(self):
-        """Initialize the Cerberus API."""
-        # Save queue and thread for ProcessPoolExecutor architecture
-        self.save_queue: Optional[queue.Queue] = None
-        self.save_thread: Optional[OptimizedSaveThread] = None
+    def __init__(self, cameras: List[tuple] = None):
+        """
+        Initialize the Cerberus API.
 
-        # Hardware controllers (camera gets save_queue later when saving starts)
-        self.camera = CameraController()
+        Args:
+            cameras: List of (camera_index, camera_id) tuples. If None, creates
+                    a single camera controller for camera 0.
+        """
+        # Camera configuration
+        if cameras is None:
+            cameras = [(0, "Camera 0")]
+        self._camera_list = cameras
+
+        # Per-camera save queues and threads
+        self._save_queues: Dict[int, queue.Queue] = {}
+        self._save_threads: Dict[int, OptimizedSaveThread] = {}
+
+        # Hardware controllers - one CameraController per camera
+        self.cameras: Dict[int, CameraController] = {}
+        for camera_index, camera_id in cameras:
+            self.cameras[camera_index] = CameraController()
+
+        # Legacy single camera reference (for backward compatibility)
+        # Points to first camera
+        self.camera = self.cameras[cameras[0][0]] if cameras else None
+
+        # Shared hardware
         self.telescope = TelescopeController()
         self.filterwheel: Optional['FilterWheel'] = None
 
         # Lock for filter wheel operations (filter wheel has no internal locking)
         self._filterwheel_lock = threading.Lock()
 
-        # System state
+        # System state with per-camera substates
         self._state = SystemState()
         self._state_lock = threading.Lock()
+
+        # Initialize camera states
+        for camera_index, camera_id in cameras:
+            self._state.cameras[camera_index] = CameraState(
+                index=camera_index,
+                camera_id=camera_id
+            )
 
         # Callbacks
         self._frame_callbacks: List[Callable] = []
         self._status_callbacks: List[Callable] = []
         self._callback_lock = threading.Lock()
 
-        # Display frame queue (for GUI)
-        self._display_queue: queue.Queue = queue.Queue(maxsize=2)
+        # Per-camera display frame queues (for GUI)
+        self._display_queues: Dict[int, queue.Queue] = {}
+        for camera_index, _ in cameras:
+            self._display_queues[camera_index] = queue.Queue(maxsize=2)
 
-        # Register internal frame handler
-        self.camera.on_frame(self._on_camera_frame)
+        # Legacy single display queue (backward compat - points to first camera's queue)
+        self._display_queue = self._display_queues[cameras[0][0]] if cameras else queue.Queue(maxsize=2)
+
+        # Register internal frame handlers for each camera
+        for camera_index, _ in cameras:
+            # Create closure to capture camera_index
+            def make_frame_handler(idx):
+                return lambda frame, ts, fs: self._on_camera_frame(frame, ts, fs, idx)
+            self.cameras[camera_index].on_frame(make_frame_handler(camera_index))
 
     # ==========================================================================
     # Camera Control
@@ -106,7 +141,7 @@ class CerberusAPI:
 
     def connect_camera(self, camera_index: int = 0) -> bool:
         """
-        Connect to the camera.
+        Connect to a camera.
 
         Args:
             camera_index: Camera device index
@@ -114,52 +149,79 @@ class CerberusAPI:
         Returns:
             True if successful
         """
-        logger.info("Connecting to camera...")
-        success = self.camera.connect(camera_index)
+        if camera_index not in self.cameras:
+            logger.error(f"Camera {camera_index} not in configured cameras: {list(self.cameras.keys())}")
+            return False
+
+        logger.info(f"Connecting to camera {camera_index}...")
+        controller = self.cameras[camera_index]
+        success = controller.connect(camera_index)
 
         with self._state_lock:
-            self._state.camera_connected = success
+            cam_state = self._state.get_camera(camera_index)
+            cam_state.connected = success
             if success:
-                self._state.camera_exposure = self.camera.get_exposure()
+                cam_state.exposure = controller.get_exposure()
 
         self._notify_status_change()
         return success
 
-    def disconnect_camera(self):
-        """Disconnect from the camera."""
-        logger.info("Disconnecting camera...")
+    def disconnect_camera(self, camera_index: int = None):
+        """
+        Disconnect from a camera.
 
-        if self._state.camera_streaming:
-            self.stop_streaming()
+        Args:
+            camera_index: Camera to disconnect. If None, disconnects all cameras.
+        """
+        if camera_index is None:
+            # Disconnect all cameras
+            for idx in list(self.cameras.keys()):
+                self.disconnect_camera(idx)
+            return
 
-        self.camera.disconnect()
+        if camera_index not in self.cameras:
+            return
+
+        logger.info(f"Disconnecting camera {camera_index}...")
+
+        cam_state = self._state.get_camera(camera_index)
+        if cam_state.streaming:
+            self.stop_streaming(camera_index)
+
+        self.cameras[camera_index].disconnect()
 
         with self._state_lock:
-            self._state.camera_connected = False
-            self._state.camera_streaming = False
+            cam_state.connected = False
+            cam_state.streaming = False
 
         self._notify_status_change()
 
-    def set_exposure(self, seconds: float) -> bool:
+    def set_exposure(self, seconds: float, camera_index: int = 0) -> bool:
         """
         Set camera exposure time.
 
         Args:
             seconds: Exposure time in seconds
+            camera_index: Camera to set exposure for
 
         Returns:
             True if successful
         """
-        success = self.camera.set_exposure(seconds)
+        if camera_index not in self.cameras:
+            return False
+
+        success = self.cameras[camera_index].set_exposure(seconds)
         if success:
             with self._state_lock:
-                self._state.camera_exposure = seconds
+                self._state.get_camera(camera_index).exposure = seconds
             self._notify_status_change()
         return success
 
-    def get_exposure(self) -> Optional[float]:
+    def get_exposure(self, camera_index: int = 0) -> Optional[float]:
         """Get current exposure time in seconds."""
-        return self.camera.get_exposure()
+        if camera_index not in self.cameras:
+            return None
+        return self.cameras[camera_index].get_exposure()
 
     def set_binning(self, factor: int) -> bool:
         """
@@ -210,49 +272,60 @@ class CerberusAPI:
     # Streaming Control
     # ==========================================================================
 
-    def start_streaming(self, align_to_second: bool = True) -> bool:
+    def start_streaming(self, camera_index: int = 0, align_to_second: bool = True) -> bool:
         """
         Start camera streaming.
 
         Args:
+            camera_index: Camera to start streaming
             align_to_second: Align capture start to next integer second
 
         Returns:
             True if successful
         """
-        logger.info("Starting streaming...")
-        success = self.camera.start_streaming(align_to_second)
+        if camera_index not in self.cameras:
+            return False
+
+        logger.info(f"Starting streaming on camera {camera_index}...")
+        success = self.cameras[camera_index].start_streaming(align_to_second)
 
         with self._state_lock:
-            self._state.camera_streaming = success
-            self._state.camera_frames_captured = 0
+            cam_state = self._state.get_camera(camera_index)
+            cam_state.streaming = success
+            cam_state.frames_captured = 0
 
         self._notify_status_change()
         return success
 
-    def stop_streaming(self) -> bool:
+    def stop_streaming(self, camera_index: int = 0) -> bool:
         """Stop camera streaming."""
-        logger.info("Stopping streaming...")
+        if camera_index not in self.cameras:
+            return False
+
+        logger.info(f"Stopping streaming on camera {camera_index}...")
 
         # Stop camera FIRST
-        success = self.camera.stop_streaming()
+        success = self.cameras[camera_index].stop_streaming()
 
         with self._state_lock:
-            self._state.camera_streaming = False
+            cam_state = self._state.get_camera(camera_index)
+            cam_state.streaming = False
 
         self._notify_status_change()
 
         # Then stop saving (after brief pause to allow in-flight frames to be saved)
-        if self._state.is_saving:
+        if self._state.get_camera(camera_index).is_saving:
             import time
             time.sleep(0.2)  # 200ms like v18 GUI
-            self.stop_saving()
+            self.stop_saving(camera_index)
 
         return success
 
-    def is_streaming(self) -> bool:
+    def is_streaming(self, camera_index: int = 0) -> bool:
         """Check if camera is streaming."""
-        return self.camera.is_streaming()
+        if camera_index not in self.cameras:
+            return False
+        return self.cameras[camera_index].is_streaming()
 
     def capture_single(self, timeout_ms: int = 30000) -> Optional[np.ndarray]:
         """
@@ -1178,7 +1251,7 @@ class CerberusAPI:
             if callback in self._status_callbacks:
                 self._status_callbacks.remove(callback)
 
-    def get_display_frame(self, timeout: float = 0.1) -> Optional[np.ndarray]:
+    def get_display_frame(self, camera_index: int = 0, timeout: float = 0.1) -> Optional[np.ndarray]:
         """
         Get latest frame for display.
 
@@ -1186,13 +1259,15 @@ class CerberusAPI:
         from a small queue.
 
         Args:
+            camera_index: Camera to get frame from
             timeout: Timeout in seconds
 
         Returns:
             Frame data or None if no frame available
         """
+        display_queue = self._display_queues.get(camera_index, self._display_queue)
         try:
-            return self._display_queue.get(timeout=timeout)
+            return display_queue.get(timeout=timeout)
         except queue.Empty:
             return None
 
@@ -1200,43 +1275,78 @@ class CerberusAPI:
     # State
     # ==========================================================================
 
+    def get_cameras(self) -> List[tuple]:
+        """Get list of (camera_index, camera_id) tuples."""
+        return self._camera_list.copy()
+
     @property
     def state(self) -> SystemState:
         """Get current system state (copy)."""
         with self._state_lock:
-            # Return a copy to prevent external modification
-            return SystemState(**self._state.__dict__)
+            # Create a deep copy of state including camera states
+            state_copy = SystemState()
+            # Copy camera states
+            for idx, cam in self._state.cameras.items():
+                state_copy.cameras[idx] = CameraState(
+                    index=cam.index,
+                    camera_id=cam.camera_id,
+                    connected=cam.connected,
+                    streaming=cam.streaming,
+                    exposure=cam.exposure,
+                    temperature=cam.temperature,
+                    frame_rate=cam.frame_rate,
+                    params=cam.params.copy(),
+                    frames_captured=cam.frames_captured,
+                    frames_saved=cam.frames_saved,
+                    frames_dropped=cam.frames_dropped,
+                    cubes_saved=cam.cubes_saved,
+                    is_saving=cam.is_saving,
+                    save_object_name=cam.save_object_name,
+                    save_output_dir=cam.save_output_dir,
+                )
+            # Copy shared state
+            state_copy.telescope_connected = self._state.telescope_connected
+            state_copy.telescope_focus = self._state.telescope_focus
+            state_copy.telescope_ra = self._state.telescope_ra
+            state_copy.telescope_dec = self._state.telescope_dec
+            state_copy.telescope_ha = self._state.telescope_ha
+            state_copy.telescope_lst = self._state.telescope_lst
+            state_copy.telescope_airmass = self._state.telescope_airmass
+            state_copy.telescope_utc = self._state.telescope_utc
+            state_copy.telescope_utc_day = self._state.telescope_utc_day
+            state_copy.telescope_utc_time = self._state.telescope_utc_time
+            state_copy.telescope_tube_length_mm = self._state.telescope_tube_length_mm
+            state_copy.telescope_offset_ra_arcsec = self._state.telescope_offset_ra_arcsec
+            state_copy.telescope_offset_dec_arcsec = self._state.telescope_offset_dec_arcsec
+            state_copy.telescope_rate_ra_arcsec_hr = self._state.telescope_rate_ra_arcsec_hr
+            state_copy.telescope_rate_dec_arcsec_hr = self._state.telescope_rate_dec_arcsec_hr
+            state_copy.telescope_cass_ring_angle = self._state.telescope_cass_ring_angle
+            state_copy.telescope_id = self._state.telescope_id
+            state_copy.filterwheel_connected = self._state.filterwheel_connected
+            state_copy.current_filter = self._state.current_filter
+            state_copy.available_filters = self._state.available_filters.copy()
+            state_copy.focus_loop_running = self._state.focus_loop_running
+            state_copy.focus_loop_progress = self._state.focus_loop_progress
+            state_copy.focus_loop_total_steps = self._state.focus_loop_total_steps
+            state_copy.last_error = self._state.last_error
+            state_copy.errors = self._state.errors.copy()
+            return state_copy
 
     def update_status(self):
         """Update system status from hardware."""
-        # Read hardware values outside lock to avoid holding lock during slow I/O
-        camera_exposure = None
-        camera_temp = None
+        # Read shared hardware values outside lock
         telescope_focus = None
         telescope_pos = None
         telescope_status = None
         current_filter = None
-        frames_written = 0
-        frames_dropped = 0
-        cubes_written = 0
 
-        # Check connection status with minimal lock
+        # Check shared connection status with minimal lock
         with self._state_lock:
-            camera_connected = self._state.camera_connected
             telescope_connected = self._state.telescope_connected
             filterwheel_connected = self._state.filterwheel_connected
-            is_saving = self._state.is_saving
 
-        # Read hardware (no lock held - allows concurrent operations)
-        camera_fps = None
-        camera_params = {}
+        # Read shared hardware (no lock held)
         try:
-            if camera_connected:
-                camera_exposure = self.camera.get_exposure()
-                camera_temp = self.camera.get_property('SENSOR_TEMPERATURE')
-                camera_fps = self.camera.get_frame_rate()
-                camera_params = self.camera.get_all_params()
-
             if telescope_connected:
                 telescope_focus = self.telescope.get_focus()
                 telescope_pos = self.telescope.get_position()
@@ -1245,25 +1355,58 @@ class CerberusAPI:
             if filterwheel_connected and self.filterwheel:
                 current_filter = self.filterwheel.filter
 
-            if is_saving and self.save_thread:
-                frames_written = self.save_thread.total_frames_saved
-                frames_dropped = self.save_thread.total_frames_dropped
-                cubes_written = self.save_thread.cubes_written
-
         except Exception as e:
-            logger.error(f"Error reading hardware status: {e}")
+            logger.error(f"Error reading shared hardware status: {e}")
+
+        # Read per-camera hardware
+        camera_data = {}
+        for camera_index, controller in self.cameras.items():
+            with self._state_lock:
+                cam_state = self._state.get_camera(camera_index)
+                cam_connected = cam_state.connected
+                cam_saving = cam_state.is_saving
+
+            if cam_connected:
+                try:
+                    camera_data[camera_index] = {
+                        'exposure': controller.get_exposure(),
+                        'temperature': controller.get_property('SENSOR_TEMPERATURE'),
+                        'fps': controller.get_frame_rate(),
+                        'params': controller.get_all_params(),
+                    }
+                except Exception as e:
+                    logger.error(f"Error reading camera {camera_index} status: {e}")
+
+            # Read save thread stats
+            if cam_saving and camera_index in self._save_threads:
+                save_thread = self._save_threads[camera_index]
+                if save_thread:
+                    camera_data.setdefault(camera_index, {})
+                    camera_data[camera_index]['frames_saved'] = save_thread.total_frames_saved
+                    camera_data[camera_index]['frames_dropped'] = save_thread.total_frames_dropped
+                    camera_data[camera_index]['cubes_saved'] = save_thread.cubes_written
 
         # Update state with lock (fast - just assignments)
         with self._state_lock:
-            if camera_connected:
-                self._state.camera_exposure = camera_exposure
-                if camera_temp:
-                    self._state.camera_temperature = camera_temp
-                if camera_fps is not None:
-                    self._state.camera_frame_rate = camera_fps
-                if camera_params:
-                    self._state.camera_params = camera_params
+            # Update per-camera state
+            for camera_index, data in camera_data.items():
+                cam_state = self._state.get_camera(camera_index)
+                if 'exposure' in data:
+                    cam_state.exposure = data['exposure']
+                if 'temperature' in data and data['temperature']:
+                    cam_state.temperature = data['temperature']
+                if 'fps' in data and data['fps'] is not None:
+                    cam_state.frame_rate = data['fps']
+                if 'params' in data and data['params']:
+                    cam_state.params = data['params']
+                if 'frames_saved' in data:
+                    cam_state.frames_saved = data['frames_saved']
+                if 'frames_dropped' in data:
+                    cam_state.frames_dropped = data['frames_dropped']
+                if 'cubes_saved' in data:
+                    cam_state.cubes_saved = data['cubes_saved']
 
+            # Update shared telescope state
             if telescope_connected:
                 self._state.telescope_focus = telescope_focus
                 if telescope_pos:
@@ -1286,11 +1429,6 @@ class CerberusAPI:
 
             if filterwheel_connected:
                 self._state.current_filter = current_filter
-
-            if is_saving:
-                self._state.frames_saved = frames_written
-                self._state.frames_dropped = frames_dropped
-                self._state.cubes_saved = cubes_written
 
         self._notify_status_change()
 
@@ -1358,28 +1496,30 @@ class CerberusAPI:
 
         return (position_dict, status_dict, filter_name)
 
-    def _on_camera_frame(self, frame: np.ndarray, timestamp: float, framestamp: int):
+    def _on_camera_frame(self, frame: np.ndarray, timestamp: float, framestamp: int, camera_index: int = 0):
         """Internal handler for camera frames."""
         with self._state_lock:
-            self._state.camera_frames_captured += 1
-            frames_captured = self._state.camera_frames_captured
-            is_saving = self._state.is_saving
+            cam_state = self._state.get_camera(camera_index)
+            cam_state.frames_captured += 1
+            frames_captured = cam_state.frames_captured
+            is_saving = cam_state.is_saving
 
         # Log periodically
         if frames_captured % 100 == 1:
-            logger.info(f"API received frame {frames_captured}, is_saving={is_saving}")
+            logger.info(f"Camera {camera_index}: received frame {frames_captured}, is_saving={is_saving}")
 
         # Note: Frames are sent to save_queue directly by camera controller
         # No need to forward to writer here
 
-        # Update display queue (keep only latest)
+        # Update per-camera display queue (keep only latest)
+        display_queue = self._display_queues.get(camera_index, self._display_queue)
         try:
-            while not self._display_queue.empty():
+            while not display_queue.empty():
                 try:
-                    self._display_queue.get_nowait()
+                    display_queue.get_nowait()
                 except:
                     break
-            self._display_queue.put_nowait(frame)
+            display_queue.put_nowait(frame)
         except queue.Full:
             pass
 
