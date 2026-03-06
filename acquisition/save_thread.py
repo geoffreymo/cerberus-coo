@@ -166,7 +166,8 @@ class OptimizedSaveThread(threading.Thread):
         frames_per_cube: int = 100,
         camera_params: Optional[Dict[str, Any]] = None,
         filter_callback: Optional[Callable] = None,
-        telescope_callback: Optional[Callable] = None
+        telescope_callback: Optional[Callable] = None,
+        camera_id: Optional[str] = None
     ):
         super().__init__(name="SaveThread", daemon=True)
 
@@ -179,6 +180,7 @@ class OptimizedSaveThread(threading.Thread):
         self.camera_params = camera_params or {}
         self.filter_callback = filter_callback
         self.telescope_callback = telescope_callback  # Returns (position_dict, status_dict)
+        self.camera_id = camera_id  # Camera identifier for filename
         self.cube_index = 0
 
         # Current accumulation buffer (allocated on first frame)
@@ -288,8 +290,12 @@ class OptimizedSaveThread(threading.Thread):
             self.cube_index += 1
             num_frames = self.current_frame_idx
 
-            # Generate filename
-            filename = f"{self.session_timestamp}_{self.object_name}_cube{self.cube_index:03d}.fits"
+            # Generate filename with camera ID
+            # Format: YYYYMMDD_HHMMSS_PHX2_M31_cube001.fits
+            if self.camera_id:
+                filename = f"{self.session_timestamp}_{self.camera_id}_{self.object_name}_cube{self.cube_index:03d}.fits"
+            else:
+                filename = f"{self.session_timestamp}_{self.object_name}_cube{self.cube_index:03d}.fits"
             filepath = os.path.join(self.output_dir, filename)
 
             # COPY the data before submitting - this ensures the write thread

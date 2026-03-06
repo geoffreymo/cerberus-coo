@@ -553,11 +553,12 @@ class CerberusAPI:
         # Add camera ID to header
         header_dict['CAMERAID'] = (camera_id, 'Camera identifier')
 
-        # Create date-based subdirectory with camera ID
+        # Create date-based subdirectory with camera ID inside
+        # Structure: output_dir/captures_YYYY_MM_DD/PHX2/
         from datetime import datetime
         import os
         date_str = datetime.now().strftime('%Y_%m_%d')
-        save_folder = os.path.join(output_dir, camera_id, f"captures_{date_str}")
+        save_folder = os.path.join(output_dir, f"captures_{date_str}", camera_id)
 
         # Create filter callback
         def get_current_filter():
@@ -619,7 +620,8 @@ class CerberusAPI:
             frames_per_cube=frames_per_cube,
             camera_params=self.cameras[camera_index].get_all_params(),
             filter_callback=get_current_filter,
-            telescope_callback=get_telescope_data
+            telescope_callback=get_telescope_data,
+            camera_id=camera_id
         )
         self._save_threads[camera_index] = save_thread
         save_thread.start()
