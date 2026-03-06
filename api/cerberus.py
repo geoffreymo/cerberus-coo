@@ -247,26 +247,32 @@ class CerberusAPI:
         """
         return self.camera.set_trigger_source(source)
 
-    def set_camera_property(self, name: str, value: float) -> bool:
+    def set_camera_property(self, name: str, value: float, camera_index: int = 0) -> bool:
         """
         Set a camera property.
 
         Args:
             name: Property name
             value: Property value
+            camera_index: Camera to set property on
 
         Returns:
             True if successful
         """
-        result = self.camera.set_property(name, value)
+        if camera_index not in self.cameras:
+            return False
+
+        result = self.cameras[camera_index].set_property(name, value)
         if result:
             # Trigger status update so GUI reflects the change
             self.update_status()
         return result
 
-    def get_camera_params(self) -> Dict[str, Any]:
+    def get_camera_params(self, camera_index: int = 0) -> Dict[str, Any]:
         """Get all camera parameters."""
-        return self.camera.get_all_params()
+        if camera_index not in self.cameras:
+            return {}
+        return self.cameras[camera_index].get_all_params()
 
     # ==========================================================================
     # Streaming Control
@@ -504,7 +510,8 @@ class CerberusAPI:
         object_name: str,
         output_dir: str,
         frames_per_cube: int = 100,
-        comment: str = ""
+        comment: str = "",
+        camera_index: int = 0
     ) -> bool:
         """
         Start saving frames to FITS cubes.
@@ -514,32 +521,43 @@ class CerberusAPI:
             output_dir: Output directory
             frames_per_cube: Number of frames per FITS cube
             comment: Optional comment for FITS headers
+            camera_index: Camera to save frames from
 
         Returns:
             True if successful
         """
-        if not self._state.camera_streaming:
-            logger.error("Cannot save: camera not streaming")
+        if camera_index not in self.cameras:
+            logger.error(f"Cannot save: camera {camera_index} not found")
             return False
 
-        logger.info(f"Starting save: {object_name} to {output_dir}")
+        cam_state = self._state.get_camera(camera_index)
+        if not cam_state.streaming:
+            logger.error(f"Cannot save: camera {camera_index} not streaming")
+            return False
+
+        # Get camera ID for subdirectory
+        camera_id = cam_state.camera_id or f"cam{camera_index}"
+        logger.info(f"Starting save on camera {camera_index} ({camera_id}): {object_name} to {output_dir}")
 
         # Create save queue (large capacity for high-speed capture)
-        self.save_queue = queue.Queue(maxsize=50000)
+        save_queue = queue.Queue(maxsize=50000)
+        self._save_queues[camera_index] = save_queue
 
         # Give camera access to the save queue
-        self.camera.save_queue = self.save_queue
+        self.cameras[camera_index].save_queue = save_queue
 
         # Build header dict with timing and telescope info
         header_dict = {}
         if comment:
             header_dict['COMMENT'] = (comment, 'User comment')
+        # Add camera ID to header
+        header_dict['CAMERAID'] = (camera_id, 'Camera identifier')
 
-        # Create date-based subdirectory
+        # Create date-based subdirectory with camera ID
         from datetime import datetime
         import os
         date_str = datetime.now().strftime('%Y_%m_%d')
-        save_folder = os.path.join(output_dir, f"captures_{date_str}")
+        save_folder = os.path.join(output_dir, camera_id, f"captures_{date_str}")
 
         # Create filter callback
         def get_current_filter():
@@ -593,55 +611,82 @@ class CerberusAPI:
             return pos_dict, status_dict
 
         # Create and start save thread with ProcessPoolExecutor
-        self.save_thread = OptimizedSaveThread(
-            save_queue=self.save_queue,
+        save_thread = OptimizedSaveThread(
+            save_queue=save_queue,
             output_dir=save_folder,
             object_name=object_name,
             header_dict=header_dict,
             frames_per_cube=frames_per_cube,
-            camera_params=self.camera.get_all_params(),
+            camera_params=self.cameras[camera_index].get_all_params(),
             filter_callback=get_current_filter,
             telescope_callback=get_telescope_data
         )
-        self.save_thread.start()
+        self._save_threads[camera_index] = save_thread
+        save_thread.start()
+
+        # Legacy reference for backward compat (points to first camera's save thread)
+        if camera_index == self._camera_list[0][0]:
+            self.save_thread = save_thread
+            self.save_queue = save_queue
 
         with self._state_lock:
-            self._state.is_saving = True
-            self._state.save_object_name = object_name
-            self._state.save_output_dir = save_folder
-            self._state.frames_saved = 0
-            self._state.frames_dropped = 0
-            self._state.cubes_saved = 0
+            cam_state = self._state.get_camera(camera_index)
+            cam_state.is_saving = True
+            cam_state.save_object_name = object_name
+            cam_state.save_output_dir = save_folder
+            cam_state.frames_saved = 0
+            cam_state.frames_dropped = 0
+            cam_state.cubes_saved = 0
 
         self._notify_status_change()
         return True
 
-    def stop_saving(self):
-        """Stop saving frames."""
-        logger.info("Stopping save...")
+    def stop_saving(self, camera_index: int = None):
+        """Stop saving frames.
+
+        Args:
+            camera_index: Camera to stop saving. If None, stops all cameras.
+        """
+        if camera_index is None:
+            # Stop all cameras
+            for idx in list(self._save_threads.keys()):
+                self.stop_saving(idx)
+            return
+
+        logger.info(f"Stopping save on camera {camera_index}...")
 
         # Set is_saving=False FIRST so camera stops putting frames in queue
         with self._state_lock:
-            self._state.is_saving = False
+            cam_state = self._state.get_camera(camera_index)
+            cam_state.is_saving = False
 
         # Remove save queue from camera
-        self.camera.save_queue = None
+        if camera_index in self.cameras:
+            self.cameras[camera_index].save_queue = None
 
         # Stop and join save thread
-        if self.save_thread and self.save_thread.is_alive():
-            self.save_thread.stop()
-            self.save_thread.join(timeout=60)  # Wait up to 60s for writes to complete
+        save_thread = self._save_threads.get(camera_index)
+        if save_thread and save_thread.is_alive():
+            save_thread.stop()
+            save_thread.join(timeout=60)  # Wait up to 60s for writes to complete
 
             # Update stats from save thread
             with self._state_lock:
-                self._state.frames_saved = self.save_thread.total_frames_saved
-                self._state.frames_dropped = self.save_thread.total_frames_dropped
-                self._state.cubes_saved = self.save_thread.cubes_written
+                cam_state = self._state.get_camera(camera_index)
+                cam_state.frames_saved = save_thread.total_frames_saved
+                cam_state.frames_dropped = save_thread.total_frames_dropped
+                cam_state.cubes_saved = save_thread.cubes_written
 
+        # Clean up
+        if camera_index in self._save_threads:
+            del self._save_threads[camera_index]
+        if camera_index in self._save_queues:
+            del self._save_queues[camera_index]
+
+        # Update legacy references
+        if camera_index == self._camera_list[0][0]:
             self.save_thread = None
-
-        # Clear save queue
-        self.save_queue = None
+            self.save_queue = None
 
         self._notify_status_change()
 
