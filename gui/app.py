@@ -79,11 +79,25 @@ class CameraTab(ttk.Frame):
 
     def update_from_state(self, state):
         """Update all panels in this tab from system state."""
+        # Skip if widget is not visible or being destroyed
+        try:
+            if not self.winfo_exists() or not self.winfo_viewable():
+                return
+        except tk.TclError:
+            return
+
         # Get per-camera state
         cam_state = state.get_camera(self.camera_index)
 
-        self.camera_panel.update_from_state(state, cam_state)
-        self.subarray_panel.update_from_state(state, cam_state)
+        try:
+            self.camera_panel.update_from_state(state, cam_state)
+        except tk.TclError:
+            pass  # Widget being destroyed
+
+        try:
+            self.subarray_panel.update_from_state(state, cam_state)
+        except tk.TclError:
+            pass  # Widget being destroyed
         # Display panel updates itself from the display loop
 
     def cleanup(self):
@@ -305,6 +319,16 @@ class CerberusGUI:
 
         self._update_panels(self._last_state)
 
+    def _get_current_tab_index(self) -> int:
+        """Get the camera_index of the currently visible tab."""
+        try:
+            current_tab_idx = self.notebook.index(self.notebook.select())
+            if current_tab_idx < len(self.cameras):
+                return self.cameras[current_tab_idx][0]
+        except:
+            pass
+        return self.cameras[0][0] if self.cameras else 0
+
     def _update_panels(self, state):
         """Update all panels from state."""
         # Skip updates if closing
@@ -312,9 +336,18 @@ class CerberusGUI:
             return
 
         try:
-            # Update all camera tabs
+            # Get currently visible tab
+            current_camera = self._get_current_tab_index()
+
+            # Update all camera tabs, but prioritize the visible one
             for camera_index, tab in self.camera_tabs.items():
-                tab.update_from_state(state)
+                try:
+                    # Always update, but could optimize to skip non-visible tabs
+                    tab.update_from_state(state)
+                except Exception as e:
+                    # Log but don't crash on individual tab update failures
+                    if not self._closing:
+                        logger.debug(f"Tab {camera_index} update error: {e}")
 
             # Update status bar (shared)
             self.status_bar.update_from_state(state)

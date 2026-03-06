@@ -530,90 +530,102 @@ class CameraControlsPanel(ttk.LabelFrame):
             state: SystemState object
             cam_state: CameraState object for this camera (optional, fetched if not provided)
         """
+        # Skip if widget doesn't exist
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
         # Get per-camera state
         if cam_state is None:
             cam_state = state.get_camera(self.camera_index)
 
-        # Connection state
-        if cam_state.connected:
-            self.connect_btn.config(text="Disconnect")
-            self.status_label.config(text="Connected", foreground="green")
-            self.start_stop_btn.config(state=tk.NORMAL)
-
-            # Update button text and color based on streaming state
-            if cam_state.streaming:
-                self.start_stop_btn.config(text="Stop", bg="#f44336", activebackground="#da190b")
-            else:
-                self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
-        else:
-            self.connect_btn.config(text="Connect")
-            self.status_label.config(text="Disconnected", foreground="black")
-            self.start_stop_btn.config(state=tk.DISABLED)
-
-        # Update filter combo if filterwheel connected (shared across cameras)
-        # Wrapped in try/except to avoid 'popdown' error when combo is open
+        # Wrap all widget updates in try/except to handle tab switching
         try:
-            if state.filterwheel_connected and state.available_filters:
-                if self.filter_combo['values'] != tuple(state.available_filters):
-                    self.filter_combo['values'] = state.available_filters
-                # Update current filter selection
-                if state.current_filter and state.current_filter != self.filter_var.get():
-                    self.filter_var.set(state.current_filter)
-            else:
-                self.filter_combo['values'] = []
-                self.filter_var.set("")
-        except tk.TclError:
-            pass  # Ignore errors when combobox is open
+            # Connection state
+            if cam_state.connected:
+                self.connect_btn.config(text="Disconnect")
+                self.status_label.config(text="Connected", foreground="green")
+                self.start_stop_btn.config(state=tk.NORMAL)
 
-        # Update frames captured display
-        self.frames_captured_var.set(str(cam_state.frames_captured))
-
-        # Check image progress if taking images
-        if self._taking_images and cam_state.streaming:
-            self._check_image_progress(cam_state.frames_captured)
-
-        # Exposure - only update if not focused on the entry
-        try:
-            if cam_state.exposure and self.winfo_toplevel().focus_get() != self.exposure_entry:
-                # Convert from seconds to current unit
-                exp_sec = cam_state.exposure
-                unit = self.exposure_unit_var.get()
-
-                if unit == "ms":
-                    new_val = exp_sec * 1000.0
-                elif unit == "s":
-                    new_val = exp_sec
-                elif unit == "min":
-                    new_val = exp_sec / 60.0
+                # Update button text and color based on streaming state
+                if cam_state.streaming:
+                    self.start_stop_btn.config(text="Stop", bg="#f44336", activebackground="#da190b")
                 else:
-                    new_val = exp_sec * 1000.0  # Default to ms
+                    self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
+            else:
+                self.connect_btn.config(text="Connect")
+                self.status_label.config(text="Disconnected", foreground="black")
+                self.start_stop_btn.config(state=tk.DISABLED)
 
-                # Display with full precision
-                new_val_str = str(new_val)
+            # Update filter combo if filterwheel connected (shared across cameras)
+            try:
+                if state.filterwheel_connected and state.available_filters:
+                    if self.filter_combo['values'] != tuple(state.available_filters):
+                        self.filter_combo['values'] = state.available_filters
+                    # Update current filter selection
+                    if state.current_filter and state.current_filter != self.filter_var.get():
+                        self.filter_var.set(state.current_filter)
+                else:
+                    self.filter_combo['values'] = []
+                    self.filter_var.set("")
+            except tk.TclError:
+                pass  # Ignore errors when combobox is open
 
-                current = self.exposure_var.get()
-                if current != new_val_str:
-                    self.exposure_var.set(new_val_str)
-        except (tk.TclError, AttributeError):
-            # Widget is being destroyed or window is closing
+            # Update frames captured display
+            self.frames_captured_var.set(str(cam_state.frames_captured))
+
+            # Check image progress if taking images
+            if self._taking_images and cam_state.streaming:
+                self._check_image_progress(cam_state.frames_captured)
+
+            # Exposure - only update if not focused on the entry
+            try:
+                if cam_state.exposure and self.winfo_toplevel().focus_get() != self.exposure_entry:
+                    # Convert from seconds to current unit
+                    exp_sec = cam_state.exposure
+                    unit = self.exposure_unit_var.get()
+
+                    if unit == "ms":
+                        new_val = exp_sec * 1000.0
+                    elif unit == "s":
+                        new_val = exp_sec
+                    elif unit == "min":
+                        new_val = exp_sec / 60.0
+                    else:
+                        new_val = exp_sec * 1000.0  # Default to ms
+
+                    # Display with full precision
+                    new_val_str = str(new_val)
+
+                    current = self.exposure_var.get()
+                    if current != new_val_str:
+                        self.exposure_var.set(new_val_str)
+            except (tk.TclError, AttributeError):
+                # Widget is being destroyed or window is closing
+                pass
+
+            # Save checkbox visual feedback - highlight when actively saving
+            if cam_state.is_saving:
+                self.save_checkbox.config(style='Active.TCheckbutton')
+            else:
+                self.save_checkbox.config(style='TCheckbutton')
+
+            # Stats (per-camera)
+            self.frames_saved_var.set(str(cam_state.frames_saved))
+            self.cubes_saved_var.set(str(cam_state.cubes_saved))
+            self.frames_dropped_var.set(str(cam_state.frames_dropped))
+
+            # Highlight drops in red
+            if cam_state.frames_dropped > 0:
+                self.dropped_label.config(foreground="red")
+            else:
+                self.dropped_label.config(foreground="black")
+
+        except tk.TclError:
+            # Widget being destroyed or not ready during tab switch
             pass
-
-        # Save checkbox visual feedback - highlight when actively saving
-        if cam_state.is_saving:
-            self.save_checkbox.config(style='Active.TCheckbutton')
-        else:
-            self.save_checkbox.config(style='TCheckbutton')
-
-        # Stats (per-camera)
-        self.frames_saved_var.set(str(cam_state.frames_saved))
-        self.cubes_saved_var.set(str(cam_state.cubes_saved))
-        self.frames_dropped_var.set(str(cam_state.frames_dropped))
-
-        # Highlight drops in red
-        if cam_state.frames_dropped > 0:
-            self.dropped_label.config(foreground="red")
-        else:
-            self.dropped_label.config(foreground="black")
 
     @property
     def root(self):
