@@ -20,9 +20,10 @@ class SubarrayPanel(ttk.LabelFrame):
     Note: Subarray changes require stopping streaming first.
     """
 
-    def __init__(self, parent, api: 'CerberusAPI'):
+    def __init__(self, parent, api: 'CerberusAPI', camera_index: int = 0):
         super().__init__(parent, text="Subarray (ROI)", padding=5)
         self.api = api
+        self.camera_index = camera_index
 
         # Variables
         self.enabled_var = tk.BooleanVar(value=False)
@@ -121,11 +122,12 @@ class SubarrayPanel(ttk.LabelFrame):
         self.apply_btn.config(state=state)
 
         # Check if streaming - need to stop/restart
-        was_streaming = self.api.state.camera_streaming
+        cam_state = self.api.state.get_camera(self.camera_index)
+        was_streaming = cam_state.streaming
 
         if was_streaming:
-            logger.info("Stopping streaming to change subarray mode...")
-            self.api.stop_streaming()
+            logger.info(f"Stopping streaming on camera {self.camera_index} to change subarray mode...")
+            self.api.stop_streaming(camera_index=self.camera_index)
             # Give camera time to stop
             self.after(200, lambda: self._apply_mode_change(enabled, was_streaming))
         else:
@@ -136,16 +138,16 @@ class SubarrayPanel(ttk.LabelFrame):
         # Set subarray mode
         # SUBARRAY_MODE: 1.0 = OFF, 2.0 = ON
         mode = 2.0 if enabled else 1.0
-        result = self.api.set_camera_property("SUBARRAY_MODE", mode)
+        result = self.api.set_camera_property("SUBARRAY_MODE", mode, camera_index=self.camera_index)
 
         if result:
-            logger.info(f"Subarray mode set to {'ON' if enabled else 'OFF'}")
+            logger.info(f"Camera {self.camera_index} subarray mode set to {'ON' if enabled else 'OFF'}")
         else:
-            logger.error("Failed to set subarray mode")
+            logger.error(f"Failed to set subarray mode on camera {self.camera_index}")
 
         # Restart streaming if it was running
         if restart_streaming:
-            self.after(100, self.api.start_streaming)
+            self.after(100, lambda: self.api.start_streaming(camera_index=self.camera_index))
 
     def _on_apply(self):
         """Apply subarray settings."""
@@ -168,11 +170,12 @@ class SubarrayPanel(ttk.LabelFrame):
             self.vsize_var.set(str(vsize))
 
             # Check if streaming - need to stop/restart
-            was_streaming = self.api.state.camera_streaming
+            cam_state = self.api.state.get_camera(self.camera_index)
+            was_streaming = cam_state.streaming
 
             if was_streaming:
-                logger.info("Stopping streaming to change subarray settings...")
-                self.api.stop_streaming()
+                logger.info(f"Stopping streaming on camera {self.camera_index} to change subarray settings...")
+                self.api.stop_streaming(camera_index=self.camera_index)
                 # Give camera time to stop, then apply
                 self.after(200, lambda: self._apply_subarray_params(
                     hpos, hsize, vpos, vsize, was_streaming))
@@ -185,17 +188,17 @@ class SubarrayPanel(ttk.LabelFrame):
     def _apply_subarray_params(self, hpos: int, hsize: int, vpos: int, vsize: int,
                                 restart_streaming: bool):
         """Apply subarray parameters after streaming stopped."""
-        logger.info(f"Applying subarray: HPOS={hpos}, VPOS={vpos}, HSIZE={hsize}, VSIZE={vsize}")
+        logger.info(f"Camera {self.camera_index}: Applying subarray: HPOS={hpos}, VPOS={vpos}, HSIZE={hsize}, VSIZE={vsize}")
 
         # Apply to camera
-        self.api.set_camera_property("SUBARRAY_HPOS", float(hpos))
-        self.api.set_camera_property("SUBARRAY_HSIZE", float(hsize))
-        self.api.set_camera_property("SUBARRAY_VPOS", float(vpos))
-        self.api.set_camera_property("SUBARRAY_VSIZE", float(vsize))
+        self.api.set_camera_property("SUBARRAY_HPOS", float(hpos), camera_index=self.camera_index)
+        self.api.set_camera_property("SUBARRAY_HSIZE", float(hsize), camera_index=self.camera_index)
+        self.api.set_camera_property("SUBARRAY_VPOS", float(vpos), camera_index=self.camera_index)
+        self.api.set_camera_property("SUBARRAY_VSIZE", float(vsize), camera_index=self.camera_index)
 
         # Restart streaming if it was running
         if restart_streaming:
-            self.after(100, self.api.start_streaming)
+            self.after(100, lambda: self.api.start_streaming(camera_index=self.camera_index))
 
     def _on_reset(self):
         """Reset subarray to full frame."""
@@ -213,8 +216,13 @@ class SubarrayPanel(ttk.LabelFrame):
         if self.on_reset:
             self.on_reset()
 
-    def update_from_state(self, state):
-        """Update panel from system state."""
+    def update_from_state(self, state, cam_state=None):
+        """Update panel from system state.
+
+        Args:
+            state: SystemState object
+            cam_state: CameraState object for this camera (optional, fetched if not provided)
+        """
         # Could be extended to read current values from camera
         pass
 
@@ -228,7 +236,7 @@ class SubarrayPanel(ttk.LabelFrame):
             hsize: Horizontal size (already rounded to 4)
             vsize: Vertical size (already rounded to 4)
         """
-        logger.info(f"Applying ROI from drag: {hsize}x{vsize} at ({hpos}, {vpos})")
+        logger.info(f"Camera {self.camera_index}: Applying ROI from drag: {hsize}x{vsize} at ({hpos}, {vpos})")
 
         # Update UI state
         self.enabled_var.set(True)
@@ -245,11 +253,12 @@ class SubarrayPanel(ttk.LabelFrame):
         self.vsize_var.set(str(vsize))
 
         # Check if streaming - need to stop/restart
-        was_streaming = self.api.state.camera_streaming
+        cam_state = self.api.state.get_camera(self.camera_index)
+        was_streaming = cam_state.streaming
 
         if was_streaming:
-            logger.info("Stopping streaming to apply ROI...")
-            self.api.stop_streaming()
+            logger.info(f"Stopping streaming on camera {self.camera_index} to apply ROI...")
+            self.api.stop_streaming(camera_index=self.camera_index)
             # Give camera time to stop, then apply all settings
             self.after(200, lambda: self._apply_roi_settings(
                 hpos, vpos, hsize, vsize, was_streaming))
@@ -260,19 +269,19 @@ class SubarrayPanel(ttk.LabelFrame):
                             restart_streaming: bool):
         """Apply all ROI settings at once after streaming stopped."""
         # Enable subarray mode first
-        self.api.set_camera_property("SUBARRAY_MODE", 2.0)
+        self.api.set_camera_property("SUBARRAY_MODE", 2.0, camera_index=self.camera_index)
 
         # Apply position/size
-        self.api.set_camera_property("SUBARRAY_HPOS", float(hpos))
-        self.api.set_camera_property("SUBARRAY_HSIZE", float(hsize))
-        self.api.set_camera_property("SUBARRAY_VPOS", float(vpos))
-        self.api.set_camera_property("SUBARRAY_VSIZE", float(vsize))
+        self.api.set_camera_property("SUBARRAY_HPOS", float(hpos), camera_index=self.camera_index)
+        self.api.set_camera_property("SUBARRAY_HSIZE", float(hsize), camera_index=self.camera_index)
+        self.api.set_camera_property("SUBARRAY_VPOS", float(vpos), camera_index=self.camera_index)
+        self.api.set_camera_property("SUBARRAY_VSIZE", float(vsize), camera_index=self.camera_index)
 
-        logger.info(f"ROI applied: {hsize}x{vsize} at ({hpos}, {vpos})")
+        logger.info(f"Camera {self.camera_index}: ROI applied: {hsize}x{vsize} at ({hpos}, {vpos})")
 
         # Restart streaming if it was running
         if restart_streaming:
-            self.after(100, self.api.start_streaming)
+            self.after(100, lambda: self.api.start_streaming(camera_index=self.camera_index))
 
     def get_current_offset(self) -> tuple:
         """Get current subarray offset (HPOS, VPOS)."""

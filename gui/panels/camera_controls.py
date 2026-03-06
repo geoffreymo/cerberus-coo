@@ -17,9 +17,10 @@ class CameraControlsPanel(ttk.LabelFrame):
     Includes connection, exposure, streaming, and save controls.
     """
 
-    def __init__(self, parent, api: 'CerberusAPI'):
+    def __init__(self, parent, api: 'CerberusAPI', camera_index: int = 0):
         super().__init__(parent, text="Camera Controls", padding=5)
         self.api = api
+        self.camera_index = camera_index
         self._display_panel = None  # Reference to display panel for auto-open
 
         # Variables - Basic
@@ -221,9 +222,10 @@ class CameraControlsPanel(ttk.LabelFrame):
 
     def _on_connect(self, event=None):
         """Handle connect button click."""
-        if self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if cam_state.connected:
             # Disconnect is fast, can do synchronously
-            self.api.disconnect_camera()
+            self.api.disconnect_camera(camera_index=self.camera_index)
             self.connect_btn.config(text="Connect")
             self.start_stop_btn.config(state=tk.DISABLED)
         else:
@@ -232,7 +234,7 @@ class CameraControlsPanel(ttk.LabelFrame):
             self.status_label.config(text="Connecting...", foreground="orange")
 
             def connect_thread():
-                success = self.api.connect_camera()
+                success = self.api.connect_camera(camera_index=self.camera_index)
                 # Update GUI in main thread
                 self.after(0, lambda: self._on_connect_complete(success))
 
@@ -248,7 +250,7 @@ class CameraControlsPanel(ttk.LabelFrame):
             self.status_label.config(text="Connected", foreground="green")
 
             # Update exposure from camera
-            exp = self.api.get_exposure()
+            exp = self.api.get_exposure(camera_index=self.camera_index)
             if exp:
                 # Convert to current unit
                 unit = self.exposure_unit_var.get()
@@ -266,10 +268,11 @@ class CameraControlsPanel(ttk.LabelFrame):
 
     def _on_start_stop(self, event=None):
         """Handle start/stop button click."""
-        if self.api.state.camera_streaming:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if cam_state.streaming:
             # Currently streaming - STOP
             # Stop camera first to prevent new frames
-            self.api.stop_streaming()
+            self.api.stop_streaming(camera_index=self.camera_index)
             self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
 
             # Stop streaming timer
@@ -277,9 +280,9 @@ class CameraControlsPanel(ttk.LabelFrame):
 
             # Brief pause for in-flight frames to be delivered
             import time
-            if self.api.state.is_saving:
+            if cam_state.is_saving:
                 time.sleep(0.05)
-                self.api.stop_saving()
+                self.api.stop_saving(camera_index=self.camera_index)
 
             # Reset take images state if was running
             if self._taking_images:
@@ -293,7 +296,7 @@ class CameraControlsPanel(ttk.LabelFrame):
             except ValueError:
                 n_images = 0
 
-            if self.api.start_streaming():
+            if self.api.start_streaming(camera_index=self.camera_index):
                 self.start_stop_btn.config(text="Stop", bg="#f44336", activebackground="#da190b")
 
                 # Start streaming timer
@@ -307,7 +310,7 @@ class CameraControlsPanel(ttk.LabelFrame):
                 if n_images > 0:
                     self._taking_images = True
                     self._target_frames = n_images
-                    self._start_frame_count = self.api.state.camera_frames_captured
+                    self._start_frame_count = cam_state.frames_captured
                     self.image_progress_var.set(f"Taking: 0 / {n_images}")
 
                 # Auto-start saving if checkbox is checked
@@ -330,7 +333,7 @@ class CameraControlsPanel(ttk.LabelFrame):
             else:
                 exp_sec = exp_value / 1000.0  # Default to ms
 
-            self.api.set_exposure(exp_sec)
+            self.api.set_exposure(exp_sec, camera_index=self.camera_index)
         except ValueError:
             pass
 
@@ -396,7 +399,8 @@ class CameraControlsPanel(ttk.LabelFrame):
 
     def _on_readout_change(self, event=None):
         """Handle readout mode change."""
-        if not self.api.state.camera_connected:
+        cam_state = self.api.state.get_camera(self.camera_index)
+        if not cam_state.connected:
             return
 
         try:
@@ -404,21 +408,22 @@ class CameraControlsPanel(ttk.LabelFrame):
             # READOUT_SPEED: 1.0 = Ultra Quiet, 2.0 = Standard
             speed_map = {"Ultra Quiet": 1.0, "Standard": 2.0}
             if value in speed_map:
-                self.api.set_camera_property("READOUT_SPEED", speed_map[value])
+                self.api.set_camera_property("READOUT_SPEED", speed_map[value], camera_index=self.camera_index)
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"Failed to set readout speed: {e}")
 
     def _on_save_toggle(self):
         """Handle save checkbox toggle."""
+        cam_state = self.api.state.get_camera(self.camera_index)
         if self.save_var.get():
             # If streaming, start saving immediately
-            if self.api.state.camera_streaming:
+            if cam_state.streaming:
                 self._start_saving()
         else:
             # Stop saving
-            if self.api.state.is_saving:
-                self.api.stop_saving()
+            if cam_state.is_saving:
+                self.api.stop_saving(camera_index=self.camera_index)
 
     def _start_saving(self):
         """Start saving to disk."""
@@ -436,8 +441,9 @@ class CameraControlsPanel(ttk.LabelFrame):
         output_dir = self.output_dir_var.get()
         comment = self.comment_var.get()
 
-        logger.info(f"_start_saving called: object={object_name}, dir={output_dir}, frames={frames_per_cube}, comment={comment}")
-        logger.info(f"Camera streaming: {self.api.state.camera_streaming}")
+        cam_state = self.api.state.get_camera(self.camera_index)
+        logger.info(f"_start_saving called: camera={self.camera_index}, object={object_name}, dir={output_dir}, frames={frames_per_cube}, comment={comment}")
+        logger.info(f"Camera streaming: {cam_state.streaming}")
 
         # Check if output directory exists, create if not
         if not os.path.exists(output_dir):
@@ -455,7 +461,8 @@ class CameraControlsPanel(ttk.LabelFrame):
             object_name=object_name,
             output_dir=output_dir,
             frames_per_cube=frames_per_cube,
-            comment=comment
+            comment=comment,
+            camera_index=self.camera_index
         )
 
         logger.info(f"start_saving returned: {success}")
@@ -510,21 +517,31 @@ class CameraControlsPanel(ttk.LabelFrame):
                 self.image_progress_var.set(f"Done: {frames_captured} images")
 
                 # Auto-stop streaming
-                if self.api.state.camera_streaming:
-                    self.api.stop_streaming()
+                cam_state = self.api.state.get_camera(self.camera_index)
+                if cam_state.streaming:
+                    self.api.stop_streaming(camera_index=self.camera_index)
                     self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
                     self._stop_stream_timer()
 
-    def update_from_state(self, state):
-        """Update panel from system state."""
+    def update_from_state(self, state, cam_state=None):
+        """Update panel from system state.
+
+        Args:
+            state: SystemState object
+            cam_state: CameraState object for this camera (optional, fetched if not provided)
+        """
+        # Get per-camera state
+        if cam_state is None:
+            cam_state = state.get_camera(self.camera_index)
+
         # Connection state
-        if state.camera_connected:
+        if cam_state.connected:
             self.connect_btn.config(text="Disconnect")
             self.status_label.config(text="Connected", foreground="green")
             self.start_stop_btn.config(state=tk.NORMAL)
 
             # Update button text and color based on streaming state
-            if state.camera_streaming:
+            if cam_state.streaming:
                 self.start_stop_btn.config(text="Stop", bg="#f44336", activebackground="#da190b")
             else:
                 self.start_stop_btn.config(text="Start", bg="#4CAF50", activebackground="#45a049")
@@ -533,7 +550,7 @@ class CameraControlsPanel(ttk.LabelFrame):
             self.status_label.config(text="Disconnected", foreground="black")
             self.start_stop_btn.config(state=tk.DISABLED)
 
-        # Update filter combo if filterwheel connected
+        # Update filter combo if filterwheel connected (shared across cameras)
         # Wrapped in try/except to avoid 'popdown' error when combo is open
         try:
             if state.filterwheel_connected and state.available_filters:
@@ -549,17 +566,17 @@ class CameraControlsPanel(ttk.LabelFrame):
             pass  # Ignore errors when combobox is open
 
         # Update frames captured display
-        self.frames_captured_var.set(str(state.camera_frames_captured))
+        self.frames_captured_var.set(str(cam_state.frames_captured))
 
         # Check image progress if taking images
-        if self._taking_images and state.camera_streaming:
-            self._check_image_progress(state.camera_frames_captured)
+        if self._taking_images and cam_state.streaming:
+            self._check_image_progress(cam_state.frames_captured)
 
         # Exposure - only update if not focused on the entry
         try:
-            if state.camera_exposure and self.root.focus_get() != self.exposure_entry:
+            if cam_state.exposure and self.root.focus_get() != self.exposure_entry:
                 # Convert from seconds to current unit
-                exp_sec = state.camera_exposure
+                exp_sec = cam_state.exposure
                 unit = self.exposure_unit_var.get()
 
                 if unit == "ms":
@@ -582,18 +599,18 @@ class CameraControlsPanel(ttk.LabelFrame):
             pass
 
         # Save checkbox visual feedback - highlight when actively saving
-        if state.is_saving:
+        if cam_state.is_saving:
             self.save_checkbox.config(style='Active.TCheckbutton')
         else:
             self.save_checkbox.config(style='TCheckbutton')
 
-        # Stats
-        self.frames_saved_var.set(str(state.frames_saved))
-        self.cubes_saved_var.set(str(state.cubes_saved))
-        self.frames_dropped_var.set(str(state.frames_dropped))
+        # Stats (per-camera)
+        self.frames_saved_var.set(str(cam_state.frames_saved))
+        self.cubes_saved_var.set(str(cam_state.cubes_saved))
+        self.frames_dropped_var.set(str(cam_state.frames_dropped))
 
         # Highlight drops in red
-        if state.frames_dropped > 0:
+        if cam_state.frames_dropped > 0:
             self.dropped_label.config(foreground="red")
         else:
             self.dropped_label.config(foreground="black")

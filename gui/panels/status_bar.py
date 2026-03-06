@@ -3,7 +3,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Tuple, Dict
 
 if TYPE_CHECKING:
     from ...api import CerberusAPI
@@ -11,81 +11,85 @@ if TYPE_CHECKING:
 
 class StatusBar(ttk.Frame):
     """
-    Status bar showing connection status, temperature, and frame rate.
+    Status bar showing connection status for all cameras, telescope, and filterwheel.
     """
 
-    def __init__(self, parent, api: 'CerberusAPI'):
+    def __init__(self, parent, api: 'CerberusAPI', cameras: List[Tuple[int, str]] = None):
         super().__init__(parent)
         self.api = api
+        self.cameras = cameras or [(0, "Camera 0")]
 
-        # Variables
-        self.camera_status_var = tk.StringVar(value="Camera: Disconnected")
+        # Per-camera status variables
+        self.camera_status_vars: Dict[int, tk.StringVar] = {}
+        self.camera_labels: Dict[int, ttk.Label] = {}
+
+        # Shared status variables
         self.telescope_status_var = tk.StringVar(value="TCS: Disconnected")
         self.filterwheel_status_var = tk.StringVar(value="Filter: Disconnected")
-        self.temperature_var = tk.StringVar(value="Temp: --")
-        self.fps_var = tk.StringVar(value="FPS: --")
-        self.frames_var = tk.StringVar(value="Frames: 0")
 
         self._create_widgets()
 
     def _create_widgets(self):
-        """Create status bar widgets in 2 columns x 3 rows."""
+        """Create status bar widgets showing all cameras."""
         # Configure grid columns
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
 
-        # Row 0: Camera | Temp
-        self.camera_label = ttk.Label(
-            self, textvariable=self.camera_status_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
-        )
-        self.camera_label.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=1)
+        row = 0
 
-        self.temp_label = ttk.Label(
-            self, textvariable=self.temperature_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
-        )
-        self.temp_label.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=1)
+        # Per-camera status rows
+        for camera_index, camera_id in self.cameras:
+            self.camera_status_vars[camera_index] = tk.StringVar(value=f"{camera_id}: Disconnected")
 
-        # Row 1: TCS | FPS
+            label = ttk.Label(
+                self, textvariable=self.camera_status_vars[camera_index],
+                relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
+            )
+            label.grid(row=row, column=0, columnspan=2, sticky="ew", pady=1)
+            self.camera_labels[camera_index] = label
+            row += 1
+
+        # Telescope status
         self.telescope_label = ttk.Label(
             self, textvariable=self.telescope_status_var,
             relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
         )
-        self.telescope_label.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=1)
+        self.telescope_label.grid(row=row, column=0, sticky="ew", padx=(0, 2), pady=1)
 
-        self.fps_label = ttk.Label(
-            self, textvariable=self.fps_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
-        )
-        self.fps_label.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=1)
-
-        # Row 2: Filter | Frames
+        # Filter status
         self.filter_label = ttk.Label(
             self, textvariable=self.filterwheel_status_var,
             relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
         )
-        self.filter_label.grid(row=2, column=0, sticky="ew", padx=(0, 2), pady=1)
-
-        self.frames_label = ttk.Label(
-            self, textvariable=self.frames_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
-        )
-        self.frames_label.grid(row=2, column=1, sticky="ew", padx=(2, 0), pady=1)
+        self.filter_label.grid(row=row, column=1, sticky="ew", padx=(2, 0), pady=1)
 
     def update_from_state(self, state):
         """Update status bar from system state."""
-        # Camera status
-        if state.camera_connected:
-            if state.camera_streaming:
-                self.camera_status_var.set("Camera: Streaming")
-                self.camera_label.config(foreground="green")
+        # Per-camera status
+        for camera_index, camera_id in self.cameras:
+            cam_state = state.get_camera(camera_index)
+
+            if cam_state.connected:
+                if cam_state.streaming:
+                    status = "Streaming"
+                    if cam_state.is_saving:
+                        status = f"Saving ({cam_state.frames_saved})"
+                    color = "green"
+                else:
+                    status = "Connected"
+                    color = "blue"
+
+                # Add temperature if available
+                if cam_state.temperature is not None:
+                    temp_str = f" {cam_state.temperature:.1f}C"
+                else:
+                    temp_str = ""
+
+                self.camera_status_vars[camera_index].set(f"{camera_id}: {status}{temp_str}")
+                self.camera_labels[camera_index].config(foreground=color)
             else:
-                self.camera_status_var.set("Camera: Connected")
-                self.camera_label.config(foreground="blue")
-        else:
-            self.camera_status_var.set("Camera: Disconnected")
-            self.camera_label.config(foreground="gray")
+                self.camera_status_vars[camera_index].set(f"{camera_id}: Disconnected")
+                self.camera_labels[camera_index].config(foreground="gray")
 
         # Telescope status
         if state.telescope_connected:
@@ -104,18 +108,3 @@ class StatusBar(ttk.Frame):
         else:
             self.filterwheel_status_var.set("Filter: Disconnected")
             self.filter_label.config(foreground="gray")
-
-        # Temperature
-        if state.camera_temperature is not None:
-            self.temperature_var.set(f"Temp: {state.camera_temperature:.1f}C")
-        else:
-            self.temperature_var.set("Temp: --")
-
-        # FPS
-        if state.camera_frame_rate is not None:
-            self.fps_var.set(f"FPS: {state.camera_frame_rate:.1f}")
-        else:
-            self.fps_var.set("FPS: --")
-
-        # Frames
-        self.frames_var.set(f"Frames: {state.camera_frames_captured}")

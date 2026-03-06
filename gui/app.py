@@ -5,7 +5,7 @@ import os
 import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 # Limit NumPy threading to reduce CPU usage during display (like v18 GUI)
 os.environ['OMP_NUM_THREADS'] = '4'
@@ -25,6 +25,71 @@ from .camera_settings_window import CameraSettingsWindow
 from .telescope_settings_window import TelescopeSettingsWindow
 
 logger = logging.getLogger(__name__)
+
+
+class CameraTab(ttk.Frame):
+    """
+    A tab containing all per-camera controls.
+
+    Each camera gets its own tab with camera controls, subarray settings,
+    and display controls.
+    """
+
+    def __init__(self, parent, api: 'CerberusAPI', camera_index: int, camera_id: str):
+        super().__init__(parent, padding=5)
+        self.api = api
+        self.camera_index = camera_index
+        self.camera_id = camera_id
+
+        self._create_widgets()
+
+    def _create_widgets(self):
+        """Create per-camera widgets."""
+        # Camera controls (includes save and filter selection)
+        self.camera_panel = CameraControlsPanel(self, self.api, camera_index=self.camera_index)
+        self.camera_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Subarray controls
+        self.subarray_panel = SubarrayPanel(self, self.api, camera_index=self.camera_index)
+        self.subarray_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Live view controls
+        self.display_panel = ImageDisplayPanel(self, self.api, camera_index=self.camera_index)
+        self.display_panel.pack(fill=tk.X, pady=(0, 5))
+
+        # Connect camera panel to display panel for auto-open on start
+        self.camera_panel.set_display_panel(self.display_panel)
+
+        # Connect display panel ROI selection to subarray panel
+        self.display_panel.on_roi_selected = self._on_roi_selected
+
+        # Connect subarray panel reset to display panel offset reset
+        self.subarray_panel.on_reset = self._on_subarray_reset
+
+    def _on_roi_selected(self, hpos: int, vpos: int, hsize: int, vsize: int):
+        """Handle ROI selection from display panel (SHIFT+drag)."""
+        logger.info(f"[{self.camera_id}] ROI selected: {hsize}x{vsize} at ({hpos}, {vpos})")
+        self.subarray_panel.apply_roi(hpos, vpos, hsize, vsize)
+        self.display_panel.set_current_subarray_offset(hpos, vpos)
+
+    def _on_subarray_reset(self):
+        """Handle subarray reset - reset display panel offset."""
+        logger.info(f"[{self.camera_id}] Subarray reset to full frame")
+        self.display_panel.set_current_subarray_offset(0, 0)
+
+    def update_from_state(self, state):
+        """Update all panels in this tab from system state."""
+        # Get per-camera state
+        cam_state = state.get_camera(self.camera_index)
+
+        self.camera_panel.update_from_state(state, cam_state)
+        self.subarray_panel.update_from_state(state, cam_state)
+        # Display panel updates itself from the display loop
+
+    def cleanup(self):
+        """Cleanup resources."""
+        if hasattr(self.display_panel, 'cleanup'):
+            self.display_panel.cleanup()
 
 
 class CerberusGUI:
@@ -179,7 +244,7 @@ class CerberusGUI:
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
         # Status bar at bottom of left pane (pack first with side=BOTTOM)
-        self.status_bar = StatusBar(left_frame, self.api)
+        self.status_bar = StatusBar(left_frame, self.api, cameras=self.cameras)
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
         # Settings buttons frame (anchored above status bar)
@@ -198,26 +263,23 @@ class CerberusGUI:
             buttons_frame, text="Focus Settings", command=self._open_focus_window
         ).pack(fill=tk.X, padx=5, pady=2)
 
-        # Camera controls (includes save and filter selection)
-        self.camera_panel = CameraControlsPanel(left_frame, self.api)
-        self.camera_panel.pack(fill=tk.X, pady=(0, 5))
+        # Create notebook for per-camera tabs
+        self.notebook = ttk.Notebook(left_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
-        # Subarray controls
-        self.subarray_panel = SubarrayPanel(left_frame, self.api)
-        self.subarray_panel.pack(fill=tk.X, pady=(0, 5))
+        # Create a tab for each camera
+        self.camera_tabs: Dict[int, CameraTab] = {}
+        for camera_index, camera_id in self.cameras:
+            tab = CameraTab(self.notebook, self.api, camera_index, camera_id)
+            self.notebook.add(tab, text=camera_id)
+            self.camera_tabs[camera_index] = tab
 
-        # Live view controls (above buttons)
-        self.display_panel = ImageDisplayPanel(left_frame, self.api)
-        self.display_panel.pack(fill=tk.X, pady=(0, 5))
-
-        # Connect camera panel to display panel for auto-open on start
-        self.camera_panel.set_display_panel(self.display_panel)
-
-        # Connect display panel ROI selection to subarray panel
-        self.display_panel.on_roi_selected = self._on_roi_selected
-
-        # Connect subarray panel reset to display panel offset reset
-        self.subarray_panel.on_reset = self._on_subarray_reset
+        # For backward compatibility, keep references to first camera's panels
+        if self.camera_tabs:
+            first_tab = self.camera_tabs[self.cameras[0][0]]
+            self.camera_panel = first_tab.camera_panel
+            self.subarray_panel = first_tab.subarray_panel
+            self.display_panel = first_tab.display_panel
 
     def _on_status_change(self, state):
         """Handle status change from API."""
@@ -231,8 +293,11 @@ class CerberusGUI:
             return
 
         try:
-            self.camera_panel.update_from_state(state)
-            self.subarray_panel.update_from_state(state)
+            # Update all camera tabs
+            for camera_index, tab in self.camera_tabs.items():
+                tab.update_from_state(state)
+
+            # Update status bar (shared)
             self.status_bar.update_from_state(state)
 
             # Update focus window if it's open
@@ -252,21 +317,6 @@ class CerberusGUI:
             if 'popdown' not in err_str:
                 if not self._closing:
                     logger.error(f"Error updating panels: {e}")
-
-    def _on_roi_selected(self, hpos: int, vpos: int, hsize: int, vsize: int):
-        """Handle ROI selection from display panel (SHIFT+drag)."""
-        logger.info(f"ROI selected: {hsize}x{vsize} at ({hpos}, {vpos})")
-
-        # Apply to subarray panel (this will also apply to camera)
-        self.subarray_panel.apply_roi(hpos, vpos, hsize, vsize)
-
-        # Update display panel's knowledge of current offset for nested ROI selection
-        self.display_panel.set_current_subarray_offset(hpos, vpos)
-
-    def _on_subarray_reset(self):
-        """Handle subarray reset - reset display panel offset."""
-        logger.info("Subarray reset to full frame")
-        self.display_panel.set_current_subarray_offset(0, 0)
 
     def _open_focus_window(self):
         """Open the focus loop window."""
@@ -375,22 +425,25 @@ class CerberusGUI:
         if messagebox.askokcancel("Quit", "Are you sure you want to quit?"):
             logger.info("Closing Cerberus GUI...")
 
-            # Cleanup display
-            if hasattr(self.display_panel, 'cleanup'):
-                self.display_panel.cleanup()
+            # Cleanup all camera tabs
+            for camera_index, tab in self.camera_tabs.items():
+                tab.cleanup()
 
             # Cleanup API
             try:
-                # Stop streaming first to prevent new frames
-                if self.api.state.camera_streaming:
-                    self.api.stop_streaming()
-                # Brief pause for in-flight frames
-                if self.api.state.is_saving:
-                    import time
-                    time.sleep(0.05)
-                    self.api.stop_saving()
-                if self.api.state.camera_connected:
-                    self.api.disconnect_camera()
+                # Stop streaming on all cameras first
+                for camera_index in self.api.cameras.keys():
+                    cam_state = self.api.state.get_camera(camera_index)
+                    if cam_state.streaming:
+                        self.api.stop_streaming(camera_index=camera_index)
+                    # Brief pause for in-flight frames
+                    if cam_state.is_saving:
+                        import time
+                        time.sleep(0.05)
+                        self.api.stop_saving(camera_index=camera_index)
+                    if cam_state.connected:
+                        self.api.disconnect_camera(camera_index=camera_index)
+
                 if self.api.state.telescope_connected:
                     self.api.disconnect_telescope()
                 if self.api.state.filterwheel_connected:

@@ -29,13 +29,21 @@ class ImageDisplayPanel(ttk.LabelFrame):
     Includes basic contrast controls and ROI selection via SHIFT+drag.
     """
 
-    def __init__(self, parent, api: 'CerberusAPI', display_size: tuple = (640, 480)):
+    def __init__(self, parent, api: 'CerberusAPI', display_size: tuple = (640, 480), camera_index: int = 0):
         super().__init__(parent, text="Live View", padding=5)
         self.api = api
+        self.camera_index = camera_index
         self.display_size = display_size
 
-        # Display state
-        self._window_name = "Cerberus Live View"
+        # Get camera ID for window title
+        camera_id = ""
+        for idx, cid in api.get_cameras():
+            if idx == camera_index:
+                camera_id = cid
+                break
+
+        # Display state - use unique window name per camera
+        self._window_name = f"Cerberus Live View - {camera_id}" if camera_id else f"Cerberus Live View - Camera {camera_index}"
         self._running = False
         self._last_frame: Optional[np.ndarray] = None
         self._window_created = False
@@ -778,7 +786,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
             # Get latest frame from API - just grab ONE frame, don't drain
             frame = None
             try:
-                frame = self.api.get_display_frame(timeout=0.001)
+                frame = self.api.get_display_frame(camera_index=self.camera_index, timeout=0.001)
             except:
                 pass
 
