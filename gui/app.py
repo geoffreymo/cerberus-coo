@@ -5,7 +5,7 @@ import os
 import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Optional
+from typing import Optional, List, Tuple
 
 # Limit NumPy threading to reduce CPU usage during display (like v18 GUI)
 os.environ['OMP_NUM_THREADS'] = '4'
@@ -39,19 +39,37 @@ class CerberusGUI:
         gui.run()
     """
 
-    def __init__(self, title: str = "Cerberus High-Speed Imager", enable_simulation: bool = False):
+    def __init__(
+        self,
+        title: str = "Cerberus High-Speed Imager",
+        enable_simulation: bool = False,
+        cameras: List[Tuple[int, str]] = None
+    ):
         """
         Initialize the GUI.
 
         Args:
             title: Window title
             enable_simulation: Enable simulation mode in focus window
+            cameras: List of (camera_index, camera_id) tuples
         """
+        # Default to single camera if not specified
+        if cameras is None:
+            cameras = [(0, "Camera 0")]
+        self.cameras = cameras
+
+        # For backward compat, track first camera
+        self.camera_index = cameras[0][0]
+        self.camera_id = cameras[0][1]
+
+        # Update title to show all cameras
+        camera_ids = [c[1] for c in cameras]
+        title = f"{title} - {', '.join(camera_ids)}"
         self.title = title
         self.enable_simulation = enable_simulation
 
-        # Create API
-        self.api = CerberusAPI()
+        # Create API with all cameras
+        self.api = CerberusAPI(cameras=cameras)
 
         # Create root window
         self.root = tk.Tk()
@@ -318,14 +336,15 @@ class CerberusGUI:
                 except Exception as e:
                     logger.debug(f"Telescope auto-connect failed: {e}")
 
-            # Auto-connect camera
-            try:
-                if self.api.connect_camera():
-                    logger.info("Camera auto-connected")
-                else:
-                    logger.info("Camera not available for auto-connect")
-            except Exception as e:
-                logger.debug(f"Camera auto-connect failed: {e}")
+            # Auto-connect all cameras
+            for camera_index, camera_id in self.cameras:
+                try:
+                    if self.api.connect_camera(camera_index=camera_index):
+                        logger.info(f"Camera auto-connected (index={camera_index}, ID={camera_id})")
+                    else:
+                        logger.info(f"Camera {camera_index} ({camera_id}) not available for auto-connect")
+                except Exception as e:
+                    logger.debug(f"Camera {camera_index} auto-connect failed: {e}")
 
             # Auto-connect filterwheel
             try:
