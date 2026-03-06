@@ -574,7 +574,7 @@ class CameraControlsPanel(ttk.LabelFrame):
 
         # Exposure - only update if not focused on the entry
         try:
-            if cam_state.exposure and self.root.focus_get() != self.exposure_entry:
+            if cam_state.exposure and self.winfo_toplevel().focus_get() != self.exposure_entry:
                 # Convert from seconds to current unit
                 exp_sec = cam_state.exposure
                 unit = self.exposure_unit_var.get()

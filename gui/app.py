@@ -162,6 +162,10 @@ class CerberusGUI:
         # Closing flag to prevent updates during shutdown
         self._closing = False
 
+        # Throttle GUI updates to prevent flooding
+        self._update_pending = False
+        self._last_state = None
+
         # Start status update timer
         self._update_status()
 
@@ -283,8 +287,23 @@ class CerberusGUI:
 
     def _on_status_change(self, state):
         """Handle status change from API."""
-        # Schedule update in main thread
-        self.root.after(0, lambda: self._update_panels(state))
+        # Store latest state
+        self._last_state = state
+
+        # Coalesce updates - only schedule if not already pending
+        if not self._update_pending:
+            self._update_pending = True
+            # Small delay to allow multiple updates to coalesce
+            self.root.after(50, self._do_update_panels)
+
+    def _do_update_panels(self):
+        """Perform the actual panel update (called from timer)."""
+        self._update_pending = False
+
+        if self._last_state is None:
+            return
+
+        self._update_panels(self._last_state)
 
     def _update_panels(self, state):
         """Update all panels from state."""
