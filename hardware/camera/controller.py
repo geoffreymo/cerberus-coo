@@ -318,12 +318,14 @@ class CameraController:
                 return
 
             # Detect buffer overflow
+            skip_validation = False
             if frames_behind > self.buffer_size:
                 lost = frames_behind - self.buffer_size
-                logger.error(f"BUFFER OVERFLOW! Lost {lost} frames. "
-                             f"Jumping from {self._frame_index} to {total_captured - self.buffer_size + 10}")
+                logger.warning(f"BUFFER OVERFLOW! Lost {lost} frames. "
+                               f"Jumping from {self._frame_index} to {total_captured - self.buffer_size + 10}")
                 self._frame_index = total_captured - self.buffer_size + 10
                 frames_behind = total_captured - self._frame_index
+                skip_validation = True  # Can't validate framestamp after jump
 
             # Read all available frames in a tight loop
             max_batch = min(frames_behind, 200)
@@ -341,20 +343,24 @@ class CameraController:
                 frame, npBuf, timestamp, framestamp = result
 
                 # Validate framestamp to detect mid-batch buffer overflow
-                expected_framestamp = self._frame_index % 65536
-                actual_framestamp = framestamp % 65536
-                if actual_framestamp != expected_framestamp:
-                    if actual_framestamp > expected_framestamp:
-                        lost = actual_framestamp - expected_framestamp
-                    else:
-                        lost = (65536 - expected_framestamp) + actual_framestamp
-                    if lost < self.buffer_size:
-                        logger.warning(f"Mid-batch overflow: lost {lost} frames, "
-                                       f"jumping from {self._frame_index} to {self._frame_index + lost}")
-                        self._frame_index += lost
-                    else:
-                        logger.error(f"Framestamp mismatch too large ({lost}), stopping batch")
-                        break
+                if not skip_validation:
+                    expected_framestamp = self._frame_index % 65536
+                    actual_framestamp = framestamp % 65536
+                    if actual_framestamp != expected_framestamp:
+                        if actual_framestamp > expected_framestamp:
+                            gap = actual_framestamp - expected_framestamp
+                        else:
+                            gap = (65536 - expected_framestamp) + actual_framestamp
+                        if gap < self.buffer_size:
+                            logger.warning(f"Mid-batch overflow: lost {gap} frames, "
+                                           f"jumping from {self._frame_index} to {self._frame_index + gap}")
+                            self._frame_index += gap
+                        else:
+                            logger.warning(f"Framestamp mismatch ({gap}), resyncing to actual framestamp")
+                            skip_validation = True
+                elif i == 0:
+                    # After overflow jump, resync frame_index to actual framestamp
+                    logger.info(f"Resyncing frame_index to framestamp {framestamp}")
 
                 self._process_frame(npBuf, timestamp, framestamp)
 
