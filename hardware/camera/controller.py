@@ -120,6 +120,7 @@ class CameraController:
         # Frame callbacks
         self._frame_callbacks: List[Callable] = []
         self._callback_lock = threading.Lock()
+        self._callback_skip: int = 1  # Deliver callbacks every N frames (adaptive)
 
         # Timestamp rollover tracking
         self._timestamp_offset = 0
@@ -284,59 +285,67 @@ class CameraController:
         logger.info("Camera main loop ended")
 
     def _capture_frame(self):
-        """Capture a single frame using transferinfo for correct buffer position."""
+        """Capture all available frames in a batch (matches v18 architecture).
+
+        Acquires lock once, reads all pending frames in a tight loop, then releases.
+        This minimizes lock overhead and wait_capevent calls at high frame rates.
+        """
         if self._stop_requested.is_set():
             return
 
-        timeout_ms = 10  # 10ms
+        timeout_ms = 100
 
-        if not DCamLock.acquire_capture(self._camera_index, timeout=0.005):
+        if not DCamLock.acquire_capture(self._camera_index, timeout=0.1):
             return
 
-        lock_released = False
         try:
             if not self._capturing or self._stop_requested.is_set():
                 return
 
-            # Wait for frame
-            if self.dcam.wait_capevent_frameready(timeout_ms):
-                # Use transferinfo to get the actual newest frame from the camera
-                transferinfo = self.dcam.cap_transferinfo()
-                if transferinfo is False:
-                    return
+            # Wait for at least one frame
+            if not self.dcam.wait_capevent_frameready(timeout_ms):
+                return
 
-                newest_index = transferinfo.nNewestFrameIndex
-                camera_frame_count = transferinfo.nFrameCount
+            # Check how many frames are available
+            transfer_info = self.dcam.cap_transferinfo()
+            if transfer_info is False:
+                return
 
-                # Detect dropped frames
-                if camera_frame_count > self._frame_index + 1:
-                    dropped = camera_frame_count - self._frame_index - 1
-                    if dropped > 0 and self._frame_index > 0:
-                        logger.warning(f"Dropped {dropped} frames (camera: {camera_frame_count}, ours: {self._frame_index})")
+            total_captured = transfer_info.nFrameCount
+            frames_behind = total_captured - self._frame_index
 
-                result = self.dcam.buf_getframe_with_timestamp_and_framestamp(newest_index)
+            if frames_behind <= 0:
+                return
 
-                if result is not False:
-                    frame, npBuf, timestamp, framestamp = result
-                    frame_copy = np.copy(npBuf)
+            # Detect buffer overflow
+            if frames_behind > self.buffer_size:
+                lost = frames_behind - self.buffer_size
+                logger.error(f"BUFFER OVERFLOW! Lost {lost} frames. "
+                             f"Jumping from {self._frame_index} to {total_captured - self.buffer_size + 10}")
+                self._frame_index = total_captured - self.buffer_size + 10
+                frames_behind = total_captured - self._frame_index
 
-                    # Sync our frame index with camera's count
-                    self._frame_index = camera_frame_count
+            # Read all available frames in a tight loop
+            max_batch = min(frames_behind, 200)
+            for i in range(max_batch):
+                if i % 50 == 0 and self._stop_requested.is_set():
+                    break
 
-                    # Release lock before processing so other threads can access DCAM
-                    DCamLock.release_capture(self._camera_index)
-                    lock_released = True
+                frame_index_safe = self._frame_index % self.buffer_size
+                result = self.dcam.buf_getframe_with_timestamp_and_framestamp(frame_index_safe)
 
-                    # Process frame (outside lock)
-                    self._process_frame(frame_copy, timestamp, framestamp)
-                    return
+                if result is False:
+                    break
+
+                # npBuf is already a fresh copy from dcambuf_copyframe — no np.copy needed
+                frame, npBuf, timestamp, framestamp = result
+                self._process_frame(npBuf, timestamp, framestamp)
 
         finally:
-            if not lock_released:
-                DCamLock.release_capture(self._camera_index)
+            DCamLock.release_capture(self._camera_index)
 
     def _process_frame(self, frame: np.ndarray, timestamp, framestamp: int):
-        """Process frame (matches cerberus_gui_test.py exactly)."""
+        """Process a captured frame. Optimized for minimal per-frame overhead."""
         # Handle timestamp rollover (32-bit microseconds wraps at ~4295 seconds)
         raw_timestamp = timestamp.sec + timestamp.microsec / 1e6
         if raw_timestamp < self._last_raw_timestamp - 4000:
@@ -352,10 +361,9 @@ class CameraController:
         self._last_raw_framestamp = framestamp
         corrected_framestamp = framestamp + self._framestamp_offset
 
-        # Get GPS timestamp for this frame (from UCAP buffer)
+        # GPS timestamp — check every frame at low rates, first frame only at high rates
         gps_unix: Optional[float] = None
         if self._gps_device is not None:
-            # At high frame rates, only capture first GPS timestamp
             if self._gps_per_frame or self._gps_start_timestamp is None:
                 gps_ts = self._gps_device.get_timestamp()
                 if gps_ts is not None:
@@ -364,37 +372,33 @@ class CameraController:
                         self._gps_start_timestamp = gps_ts
                         logger.info(f"GPS start timestamp: {gps_ts.isot}")
 
-        self._frame_count += 1
-
-        # Calculate FPS
-        current_time = time.time()
-        elapsed = current_time - self._fps_calc_time
-        if elapsed >= 1.0:
-            self._fps = self._frame_count / elapsed
-            self._frame_count = 0
-            self._fps_calc_time = current_time
-
-        # Queue for saving if enabled (4-tuple with GPS timestamp)
+        # Queue for saving (4-tuple with GPS timestamp)
         if self.save_queue is not None:
-            queue_size = self.save_queue.qsize()
-            max_size = self.save_queue.maxsize if hasattr(self.save_queue, 'maxsize') else 50000
+            try:
+                self.save_queue.put_nowait((frame, corrected_timestamp, corrected_framestamp, gps_unix))
+            except queue.Full:
+                pass
 
-            # Backpressure check
-            if queue_size > max_size * 0.9:
-                pass  # Drop frame
-            else:
-                try:
-                    self.save_queue.put_nowait((frame, corrected_timestamp, corrected_framestamp, gps_unix))
-                except queue.Full:
-                    pass
+        # FPS calculation and callback delivery — only every 100 frames to reduce overhead
+        self._frame_count += 1
+        if self._frame_index % 100 == 0:
+            current_time = time.time()
+            elapsed = current_time - self._fps_calc_time
+            if elapsed >= 1.0:
+                self._fps = self._frame_count / elapsed
+                self._frame_count = 0
+                self._fps_calc_time = current_time
 
-        # Deliver to callbacks (still 3-tuple for backward compatibility)
-        with self._callback_lock:
-            for callback in self._frame_callbacks:
-                try:
-                    callback(frame, corrected_timestamp, corrected_framestamp)
-                except Exception as e:
-                    logger.error(f"Error in frame callback: {e}")
+        # Deliver to callbacks — throttled to reduce overhead at high frame rates
+        if self._frame_callbacks and self._frame_index % self._callback_skip == 0:
+            with self._callback_lock:
+                for callback in self._frame_callbacks:
+                    try:
+                        callback(frame, corrected_timestamp, corrected_framestamp)
+                    except Exception as e:
+                        logger.error(f"Error in frame callback: {e}")
+
+        self._frame_index += 1
 
     # === Streaming Control ===
 
@@ -441,20 +445,29 @@ class CameraController:
             # Clear GPS buffer and reset start timestamp
             self._gps_start_timestamp = None
             self._gps_per_frame = True
+            self._callback_skip = 1
+
+            # Check frame rate for adaptive settings
+            frame_rate = None
+            try:
+                frame_rate = self.dcam.prop_getvalue(CAMERA_PARAMS['INTERNAL_FRAME_RATE'])
+            except Exception:
+                pass
+
             if self._gps_device is not None:
                 self._gps_device.clear_buffer()
                 logger.info("GPS UCAP buffer cleared for capture")
 
-                # Check frame rate - disable per-frame GPS if too fast for UCAP FIFO
-                try:
-                    frame_rate = self.dcam.prop_getvalue(CAMERA_PARAMS['INTERNAL_FRAME_RATE'])
-                    if frame_rate and frame_rate > 121:
-                        self._gps_per_frame = False
-                        logger.info(f"Frame rate {frame_rate:.1f} Hz > 121 Hz: GPS tagging first frame only")
-                    else:
-                        logger.info(f"Frame rate {frame_rate:.1f} Hz: GPS tagging every frame")
-                except Exception:
-                    pass
+                if frame_rate and frame_rate > 121:
+                    self._gps_per_frame = False
+                    logger.info(f"Frame rate {frame_rate:.1f} Hz > 121 Hz: GPS tagging first frame only")
+                elif frame_rate:
+                    logger.info(f"Frame rate {frame_rate:.1f} Hz: GPS tagging every frame")
+
+            # At high frame rates, skip callback delivery to reduce overhead
+            if frame_rate and frame_rate > 100:
+                self._callback_skip = max(1, int(frame_rate / 30))  # ~30 callbacks/sec
+                logger.info(f"Callback skip set to {self._callback_skip} (delivering ~{frame_rate/self._callback_skip:.0f}/sec)")
 
             # Enable timestamp producer
             try:
