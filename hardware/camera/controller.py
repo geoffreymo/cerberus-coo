@@ -149,6 +149,7 @@ class CameraController:
         # GPS timing device (shared across cameras, set by API)
         self._gps_device: Optional['GPSTimingDevice'] = None
         self._gps_start_timestamp: Optional['GPSTimestamp'] = None
+        self._gps_per_frame: bool = True  # False if frame rate > 121 Hz
 
     # === Connection (starts persistent thread) ===
 
@@ -338,13 +339,14 @@ class CameraController:
         # Get GPS timestamp for this frame (from UCAP buffer)
         gps_unix: Optional[float] = None
         if self._gps_device is not None:
-            gps_ts = self._gps_device.get_timestamp()
-            if gps_ts is not None:
-                gps_unix = gps_ts.unix_seconds
-                # Store first GPS timestamp for FITS header
-                if self._gps_start_timestamp is None:
-                    self._gps_start_timestamp = gps_ts
-                    logger.info(f"GPS start timestamp: {gps_ts.isot}")
+            # At high frame rates, only capture first GPS timestamp
+            if self._gps_per_frame or self._gps_start_timestamp is None:
+                gps_ts = self._gps_device.get_timestamp()
+                if gps_ts is not None:
+                    gps_unix = gps_ts.unix_seconds
+                    if self._gps_start_timestamp is None:
+                        self._gps_start_timestamp = gps_ts
+                        logger.info(f"GPS start timestamp: {gps_ts.isot}")
 
         self._frame_count += 1
 
@@ -424,9 +426,21 @@ class CameraController:
 
             # Clear GPS buffer and reset start timestamp
             self._gps_start_timestamp = None
+            self._gps_per_frame = True
             if self._gps_device is not None:
                 self._gps_device.clear_buffer()
                 logger.info("GPS UCAP buffer cleared for capture")
+
+                # Check frame rate - disable per-frame GPS if too fast for UCAP FIFO
+                try:
+                    frame_rate = self.dcam.prop_getvalue(CAMERA_PARAMS['INTERNAL_FRAME_RATE'])
+                    if frame_rate and frame_rate > 121:
+                        self._gps_per_frame = False
+                        logger.info(f"Frame rate {frame_rate:.1f} Hz > 121 Hz: GPS tagging first frame only")
+                    else:
+                        logger.info(f"Frame rate {frame_rate:.1f} Hz: GPS tagging every frame")
+                except Exception:
+                    pass
 
             # Enable timestamp producer
             try:
