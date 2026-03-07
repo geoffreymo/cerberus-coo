@@ -19,7 +19,7 @@
             "OUTPUT_TRIG_SOURCE_0": 2.0,
             "OUTPUT_TRIG_ACTIVE_0": 1.0,
             "OUTPUT_TRIG_POLARITY_0": 1.0,
-            "OUTPUT_TRIG_PERIOD_0": 0.0,
+            "OUTPUT_TRIG_PERIOD_0": 0.000001,
             "SENSOR_MODE": 1.0,
             "IMAGE_PIXEL_TYPE": 2.0,
             "DEFECT_CORRECT_MODE": 1.0,
