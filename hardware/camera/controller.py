@@ -442,15 +442,17 @@ class CameraController:
 
             frame_mb = int(frame_bytes) / (1024 * 1024)
 
+            # Scale target memory with frame size
+            # Full frame (~18MB): 500 frames = ~9GB (matches previous default)
+            # Small frames (<0.5MB): up to 10,000 frames = ~800MB
             if frame_mb > 8:
-                target_mb = 200
+                target_frames = 500  # Full frame: keep previous default
             elif frame_mb > 2:
-                target_mb = 400
+                target_frames = 1000
             else:
-                target_mb = 800
+                target_frames = min(10000, int(800 / frame_mb))
 
-            calculated = int(target_mb / frame_mb)
-            self.buffer_size = max(50, min(10000, calculated))
+            self.buffer_size = max(50, target_frames)
 
             logger.info(f"Adaptive buffer: frame={frame_mb:.3f}MB, "
                         f"target={target_mb}MB, buffer_size={self.buffer_size}")
