@@ -424,6 +424,39 @@ class CameraController:
 
     # === Streaming Control ===
 
+    def _calculate_buffer_size(self):
+        """Calculate buffer size adaptively based on frame size.
+
+        Larger buffers absorb burst latency (GC pauses, disk stalls).
+        Small frames (high fps) get more frames; large frames get fewer.
+        """
+        try:
+            frame_bytes = self.dcam.prop_getvalue(CAMERA_PARAMS['IMAGE_FRAMEBYTES'])
+            if not frame_bytes or frame_bytes <= 0:
+                width = self.dcam.prop_getvalue(CAMERA_PARAMS['IMAGE_WIDTH'])
+                height = self.dcam.prop_getvalue(CAMERA_PARAMS['IMAGE_HEIGHT'])
+                if width and height and width > 0 and height > 0:
+                    frame_bytes = int(width) * int(height) * 2
+                else:
+                    frame_bytes = 16 * 1024 * 1024  # 16 MB fallback
+
+            frame_mb = int(frame_bytes) / (1024 * 1024)
+
+            if frame_mb > 8:
+                target_mb = 200
+            elif frame_mb > 2:
+                target_mb = 400
+            else:
+                target_mb = 800
+
+            calculated = int(target_mb / frame_mb)
+            self.buffer_size = max(50, min(10000, calculated))
+
+            logger.info(f"Adaptive buffer: frame={frame_mb:.3f}MB, "
+                        f"target={target_mb}MB, buffer_size={self.buffer_size}")
+        except Exception as e:
+            logger.warning(f"Could not calculate adaptive buffer: {e}, using {self.buffer_size}")
+
     def start_streaming(self, align_to_second: bool = True) -> bool:
         """Start capture (sets flags, actual capture happens in camera thread)."""
         logger.info("Starting capture")
@@ -446,6 +479,9 @@ class CameraController:
             if self.dcam is None:
                 logger.error("Camera not initialized")
                 return False
+
+            # Calculate adaptive buffer size based on frame size
+            self._calculate_buffer_size()
 
             # Allocate buffer
             logger.info(f"Allocating camera ring buffer for {self.buffer_size} frames")
