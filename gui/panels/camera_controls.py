@@ -61,6 +61,16 @@ class CameraControlsPanel(ttk.LabelFrame):
         """Set reference to display panel for auto-open on stream start."""
         self._display_panel = display_panel
 
+    @staticmethod
+    def _format_exposure(value):
+        """Format exposure value for display, avoiding excessive decimals."""
+        if value >= 1.0 and value == int(value):
+            return str(int(value))
+        elif value >= 1.0:
+            return f"{value:.2f}".rstrip('0').rstrip('.')
+        else:
+            return f"{value:.6g}"
+
     def _create_widgets(self):
         """Create panel widgets."""
         # Connection row
@@ -262,7 +272,7 @@ class CameraControlsPanel(ttk.LabelFrame):
                     exp_display = exp / 60.0
                 else:
                     exp_display = exp * 1000.0
-                self.exposure_var.set(str(exp_display))
+                self.exposure_var.set(self._format_exposure(exp_display))
         else:
             self.status_label.config(text="Failed", foreground="red")
 
@@ -365,8 +375,7 @@ class CameraControlsPanel(ttk.LabelFrame):
             else:
                 new_value = exp_sec * 1000.0
 
-            # Update display with full precision
-            self.exposure_var.set(str(new_value))
+            self.exposure_var.set(self._format_exposure(new_value))
             self._last_unit = new_unit
 
         except ValueError:
@@ -596,8 +605,7 @@ class CameraControlsPanel(ttk.LabelFrame):
                     else:
                         new_val = exp_sec * 1000.0  # Default to ms
 
-                    # Display with full precision
-                    new_val_str = str(new_val)
+                    new_val_str = self._format_exposure(new_val)
 
                     current = self.exposure_var.get()
                     if current != new_val_str:
