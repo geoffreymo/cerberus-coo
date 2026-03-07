@@ -339,6 +339,23 @@ class CameraController:
 
                 # npBuf is already a fresh copy from dcambuf_copyframe — no np.copy needed
                 frame, npBuf, timestamp, framestamp = result
+
+                # Validate framestamp to detect mid-batch buffer overflow
+                expected_framestamp = self._frame_index % 65536
+                actual_framestamp = framestamp % 65536
+                if actual_framestamp != expected_framestamp:
+                    if actual_framestamp > expected_framestamp:
+                        lost = actual_framestamp - expected_framestamp
+                    else:
+                        lost = (65536 - expected_framestamp) + actual_framestamp
+                    if lost < self.buffer_size:
+                        logger.warning(f"Mid-batch overflow: lost {lost} frames, "
+                                       f"jumping from {self._frame_index} to {self._frame_index + lost}")
+                        self._frame_index += lost
+                    else:
+                        logger.error(f"Framestamp mismatch too large ({lost}), stopping batch")
+                        break
+
                 self._process_frame(npBuf, timestamp, framestamp)
 
         finally:
@@ -379,15 +396,14 @@ class CameraController:
             except queue.Full:
                 pass
 
-        # FPS calculation and callback delivery — only every 100 frames to reduce overhead
+        # FPS calculation (time.time is vDSO on Linux, ~50ns — negligible)
         self._frame_count += 1
-        if self._frame_index % 100 == 0:
-            current_time = time.time()
-            elapsed = current_time - self._fps_calc_time
-            if elapsed >= 1.0:
-                self._fps = self._frame_count / elapsed
-                self._frame_count = 0
-                self._fps_calc_time = current_time
+        current_time = time.time()
+        elapsed = current_time - self._fps_calc_time
+        if elapsed >= 1.0:
+            self._fps = self._frame_count / elapsed
+            self._frame_count = 0
+            self._fps_calc_time = current_time
 
         # Deliver to callbacks — throttled to reduce overhead at high frame rates
         if self._frame_callbacks and self._frame_index % self._callback_skip == 0:
