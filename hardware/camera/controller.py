@@ -455,7 +455,7 @@ class CameraController:
             self.buffer_size = max(50, target_frames)
 
             logger.info(f"Adaptive buffer: frame={frame_mb:.3f}MB, "
-                        f"target={target_mb}MB, buffer_size={self.buffer_size}")
+                        f"buffer_size={self.buffer_size} ({self.buffer_size * frame_mb:.0f}MB)")
         except Exception as e:
             logger.warning(f"Could not calculate adaptive buffer: {e}, using {self.buffer_size}")
 
