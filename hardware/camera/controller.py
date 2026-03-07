@@ -12,12 +12,15 @@ import time
 import queue
 import warnings
 from datetime import datetime
-from typing import Callable, Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
 from ..dcam import Dcam, Dcamapi, CAMERA_PARAMS
 from ...config import get_config
+
+if TYPE_CHECKING:
+    from ..gps_timing import GPSTimingDevice, GPSTimestamp
 
 # Optional astropy import for FITS writing
 try:
@@ -142,6 +145,10 @@ class CameraController:
 
         # Current exposure time (for FITS headers)
         self._current_exposure: Optional[float] = None
+
+        # GPS timing device (shared across cameras, set by API)
+        self._gps_device: Optional['GPSTimingDevice'] = None
+        self._gps_start_timestamp: Optional['GPSTimestamp'] = None
 
     # === Connection (starts persistent thread) ===
 
@@ -328,6 +335,17 @@ class CameraController:
         self._last_raw_framestamp = framestamp
         corrected_framestamp = framestamp + self._framestamp_offset
 
+        # Get GPS timestamp for this frame (from UCAP buffer)
+        gps_unix: Optional[float] = None
+        if self._gps_device is not None:
+            gps_ts = self._gps_device.get_timestamp()
+            if gps_ts is not None:
+                gps_unix = gps_ts.unix_seconds
+                # Store first GPS timestamp for FITS header
+                if self._gps_start_timestamp is None:
+                    self._gps_start_timestamp = gps_ts
+                    logger.info(f"GPS start timestamp: {gps_ts.isot}")
+
         self._frame_count += 1
 
         # Calculate FPS
@@ -338,7 +356,7 @@ class CameraController:
             self._frame_count = 0
             self._fps_calc_time = current_time
 
-        # Queue for saving if enabled
+        # Queue for saving if enabled (4-tuple with GPS timestamp)
         if self.save_queue is not None:
             queue_size = self.save_queue.qsize()
             max_size = self.save_queue.maxsize if hasattr(self.save_queue, 'maxsize') else 50000
@@ -348,11 +366,11 @@ class CameraController:
                 pass  # Drop frame
             else:
                 try:
-                    self.save_queue.put_nowait((frame, corrected_timestamp, corrected_framestamp))
+                    self.save_queue.put_nowait((frame, corrected_timestamp, corrected_framestamp, gps_unix))
                 except queue.Full:
                     pass
 
-        # Deliver to callbacks
+        # Deliver to callbacks (still 3-tuple for backward compatibility)
         with self._callback_lock:
             for callback in self._frame_callbacks:
                 try:
@@ -403,6 +421,12 @@ class CameraController:
             self._last_raw_timestamp = 0
             self._framestamp_offset = 0
             self._last_raw_framestamp = 0
+
+            # Clear GPS buffer and reset start timestamp
+            self._gps_start_timestamp = None
+            if self._gps_device is not None:
+                self._gps_device.clear_buffer()
+                logger.info("GPS UCAP buffer cleared for capture")
 
             # Enable timestamp producer
             try:
@@ -479,6 +503,30 @@ class CameraController:
     def is_streaming(self) -> bool:
         """Check if capture is running."""
         return self._capturing
+
+    # === GPS Timing ===
+
+    def set_gps_device(self, device: Optional['GPSTimingDevice']):
+        """
+        Set the GPS timing device for this camera.
+
+        The GPS device is shared across all cameras. Each camera reads
+        timestamps from the UCAP buffer as frames are captured.
+
+        Args:
+            device: GPSTimingDevice instance, or None to disable GPS timing
+        """
+        self._gps_device = device
+        self._gps_start_timestamp = None
+
+    def get_gps_start_timestamp(self) -> Optional['GPSTimestamp']:
+        """
+        Get the GPS timestamp of the first frame in the current capture.
+
+        Returns:
+            GPSTimestamp of first frame, or None if not yet captured
+        """
+        return self._gps_start_timestamp
 
     # === Warmup ===
 

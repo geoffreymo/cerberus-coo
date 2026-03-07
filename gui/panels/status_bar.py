@@ -26,14 +26,16 @@ class StatusBar(ttk.Frame):
         # Shared status variables
         self.telescope_status_var = tk.StringVar(value="TCS: Disconnected")
         self.filterwheel_status_var = tk.StringVar(value="Filter: Disconnected")
+        self.gps_status_var = tk.StringVar(value="GPS: ○")
 
         self._create_widgets()
 
     def _create_widgets(self):
         """Create status bar widgets showing all cameras."""
-        # Configure grid columns
+        # Configure grid columns (3 columns for telescope, filter, GPS)
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
+        self.columnconfigure(2, weight=1)
 
         row = 0
 
@@ -45,7 +47,7 @@ class StatusBar(ttk.Frame):
                 self, textvariable=self.camera_status_vars[camera_index],
                 relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
             )
-            label.grid(row=row, column=0, columnspan=2, sticky="ew", pady=1)
+            label.grid(row=row, column=0, columnspan=3, sticky="ew", pady=1)
             self.camera_labels[camera_index] = label
             row += 1
 
@@ -61,7 +63,14 @@ class StatusBar(ttk.Frame):
             self, textvariable=self.filterwheel_status_var,
             relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
         )
-        self.filter_label.grid(row=row, column=1, sticky="ew", padx=(2, 0), pady=1)
+        self.filter_label.grid(row=row, column=1, sticky="ew", padx=2, pady=1)
+
+        # GPS status
+        self.gps_label = ttk.Label(
+            self, textvariable=self.gps_status_var,
+            relief=tk.SUNKEN, anchor=tk.W, padding=(5, 2)
+        )
+        self.gps_label.grid(row=row, column=2, sticky="ew", padx=(2, 0), pady=1)
 
     def update_from_state(self, state):
         """Update status bar from system state."""
@@ -108,3 +117,11 @@ class StatusBar(ttk.Frame):
         else:
             self.filterwheel_status_var.set("Filter: Disconnected")
             self.filter_label.config(foreground="gray")
+
+        # GPS status
+        if state.gps_connected:
+            self.gps_status_var.set("GPS: ●")
+            self.gps_label.config(foreground="green")
+        else:
+            self.gps_status_var.set("GPS: ○")
+            self.gps_label.config(foreground="gray")

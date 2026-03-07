@@ -36,6 +36,14 @@ except ImportError:
     FocusLoopConfig = None
     FocusResult = None
 
+try:
+    from ..hardware.gps_timing import GPSTimingDevice, GPSTimestamp
+    GPS_AVAILABLE = True
+except ImportError:
+    GPS_AVAILABLE = False
+    GPSTimingDevice = None
+    GPSTimestamp = None
+
 
 class CerberusAPI:
     """
@@ -100,6 +108,7 @@ class CerberusAPI:
         # Shared hardware
         self.telescope = TelescopeController()
         self.filterwheel: Optional['FilterWheel'] = None
+        self.gps_device: Optional['GPSTimingDevice'] = None
 
         # Lock for filter wheel operations (filter wheel has no internal locking)
         self._filterwheel_lock = threading.Lock()
@@ -611,6 +620,11 @@ class CerberusAPI:
 
             return pos_dict, status_dict
 
+        # Create GPS start callback - returns GPS timestamp of first frame
+        def get_gps_start():
+            """Get GPS timestamp of first frame for FITS header"""
+            return self.cameras[camera_index].get_gps_start_timestamp()
+
         # Create and start save thread with ProcessPoolExecutor
         save_thread = OptimizedSaveThread(
             save_queue=save_queue,
@@ -621,7 +635,8 @@ class CerberusAPI:
             camera_params=self.cameras[camera_index].get_all_params(),
             filter_callback=get_current_filter,
             telescope_callback=get_telescope_data,
-            camera_id=camera_id
+            camera_id=camera_id,
+            gps_start_callback=get_gps_start
         )
         self._save_threads[camera_index] = save_thread
         save_thread.start()
@@ -878,6 +893,74 @@ class CerberusAPI:
             self._state.current_filter = None
 
         self._notify_status_change()
+
+    # ==========================================================================
+    # GPS Timing
+    # ==========================================================================
+
+    def connect_gps(self) -> bool:
+        """
+        Connect to the GPS timing device.
+
+        The GPS device provides precision timestamps from the Meinberg UCAP buffer.
+        It is shared across all cameras.
+
+        Returns:
+            True if successful
+        """
+        if not GPS_AVAILABLE:
+            logger.warning("GPS timing module not available")
+            return False
+
+        if self.gps_device is not None:
+            logger.info("GPS device already connected")
+            return True
+
+        try:
+            self.gps_device = GPSTimingDevice()
+            if self.gps_device.connect():
+                logger.info("GPS timing device connected")
+
+                # Share with all cameras
+                for cam in self.cameras.values():
+                    cam.set_gps_device(self.gps_device)
+
+                with self._state_lock:
+                    self._state.gps_connected = True
+
+                self._notify_status_change()
+                return True
+            else:
+                logger.warning("Failed to connect GPS device")
+                self.gps_device = None
+                return False
+
+        except Exception as e:
+            logger.error(f"GPS connection error: {e}")
+            self.gps_device = None
+            return False
+
+    def disconnect_gps(self):
+        """Disconnect from the GPS timing device."""
+        if self.gps_device is not None:
+            # Remove from all cameras
+            for cam in self.cameras.values():
+                cam.set_gps_device(None)
+
+            try:
+                self.gps_device.disconnect()
+            except:
+                pass
+            self.gps_device = None
+
+        with self._state_lock:
+            self._state.gps_connected = False
+
+        self._notify_status_change()
+
+    def is_gps_connected(self) -> bool:
+        """Check if GPS device is connected."""
+        return self.gps_device is not None and self.gps_device.is_connected
 
     def set_filter(self, name: str, apply_focus: bool = True) -> bool:
         """

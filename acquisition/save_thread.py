@@ -42,7 +42,9 @@ def write_fits_cube(
     filter_name: Optional[str] = None,
     telescope_position: Optional[Dict[str, Any]] = None,
     telescope_status: Optional[Dict[str, Any]] = None,
-    cube_start_time: Optional[float] = None
+    cube_start_time: Optional[float] = None,
+    gps_timestamps: Optional[np.ndarray] = None,
+    gps_start_isot: Optional[str] = None
 ) -> tuple:
     """
     Write FITS file from numpy arrays - runs in thread pool.
@@ -71,6 +73,10 @@ def write_fits_cube(
         # Filter name
         if filter_name:
             primary_hdr['FILTER'] = (filter_name, 'Filter name')
+
+        # GPS timing header
+        if gps_start_isot:
+            primary_hdr['GPSSTART'] = (gps_start_isot, 'GPS time at capture start (ISO-T)')
 
         # Additional header items
         for key, value in header_dict.items():
@@ -125,7 +131,16 @@ def write_fits_cube(
         # BinTableHDU for timestamps
         col1 = fits.Column(name='TIMESTAMP', format='D', array=timestamps)
         col2 = fits.Column(name='FRAMESTAMP', format='K', array=framestamps)
-        timestamp_hdu = fits.BinTableHDU.from_columns([col1, col2])
+
+        # Add GPS timestamp column if available
+        if gps_timestamps is not None and len(gps_timestamps) > 0 and not np.all(np.isnan(gps_timestamps)):
+            col3 = fits.Column(name='GPSTIME', format='D', array=gps_timestamps)
+            timestamp_hdu = fits.BinTableHDU.from_columns([col1, col2, col3])
+            timestamp_hdu.header['TUNIT3'] = 's'
+            timestamp_hdu.header.comments['TUNIT3'] = 'Unix seconds (ns precision)'
+        else:
+            timestamp_hdu = fits.BinTableHDU.from_columns([col1, col2])
+
         timestamp_hdu.header['EXTNAME'] = 'TIMESTAMPS'
 
         hdul = fits.HDUList([primary_hdu, image_hdu, timestamp_hdu])
@@ -167,7 +182,8 @@ class OptimizedSaveThread(threading.Thread):
         camera_params: Optional[Dict[str, Any]] = None,
         filter_callback: Optional[Callable] = None,
         telescope_callback: Optional[Callable] = None,
-        camera_id: Optional[str] = None
+        camera_id: Optional[str] = None,
+        gps_start_callback: Optional[Callable] = None
     ):
         super().__init__(name="SaveThread", daemon=True)
 
@@ -181,12 +197,14 @@ class OptimizedSaveThread(threading.Thread):
         self.filter_callback = filter_callback
         self.telescope_callback = telescope_callback  # Returns (position_dict, status_dict)
         self.camera_id = camera_id  # Camera identifier for filename
+        self.gps_start_callback = gps_start_callback  # Returns GPSTimestamp or None
         self.cube_index = 0
 
         # Current accumulation buffer (allocated on first frame)
         self.frame_buffer = None
         self.ts_buffer = None
         self.fs_buffer = None
+        self.gps_buffer = None  # GPS timestamps (unix seconds)
         self.current_frame_idx = 0
 
         # Track wall-clock time of first frame in current cube
@@ -220,7 +238,14 @@ class OptimizedSaveThread(threading.Thread):
                     t0 = time.perf_counter()
 
                     try:
-                        frame, timestamp, framestamp = self.save_queue.get(timeout=0.001)
+                        item = self.save_queue.get(timeout=0.001)
+
+                        # Handle 3-tuple (legacy) or 4-tuple (with GPS)
+                        if len(item) == 4:
+                            frame, timestamp, framestamp, gps_ts = item
+                        else:
+                            frame, timestamp, framestamp = item
+                            gps_ts = None
 
                         # Initialize buffer on first frame
                         if self.frame_buffer is None:
@@ -235,6 +260,8 @@ class OptimizedSaveThread(threading.Thread):
                             self.frame_buffer[self.current_frame_idx] = frame
                             self.ts_buffer[self.current_frame_idx] = timestamp
                             self.fs_buffer[self.current_frame_idx] = framestamp
+                            if gps_ts is not None:
+                                self.gps_buffer[self.current_frame_idx] = gps_ts
                             self.current_frame_idx += 1
 
                         self.timing_stats['frame_copy'].append(time.perf_counter() - t0)
@@ -279,6 +306,7 @@ class OptimizedSaveThread(threading.Thread):
         self.frame_buffer = np.empty(buffer_shape, dtype=frame_dtype)
         self.ts_buffer = np.empty(self.frames_per_cube, dtype=np.float64)
         self.fs_buffer = np.empty(self.frames_per_cube, dtype=np.int64)
+        self.gps_buffer = np.full(self.frames_per_cube, np.nan, dtype=np.float64)
 
         buffer_mb = self.frame_buffer.nbytes / 1e6
         logger.info(f"Allocated save buffer: {self.frames_per_cube} x {frame_shape} "
@@ -303,6 +331,17 @@ class OptimizedSaveThread(threading.Thread):
             frames_copy = self.frame_buffer[:num_frames].copy()
             ts_copy = self.ts_buffer[:num_frames].copy()
             fs_copy = self.fs_buffer[:num_frames].copy()
+            gps_copy = self.gps_buffer[:num_frames].copy()
+
+            # Get GPS start timestamp (for GPSSTART header)
+            gps_start_isot = None
+            if self.gps_start_callback:
+                try:
+                    gps_start = self.gps_start_callback()
+                    if gps_start is not None:
+                        gps_start_isot = gps_start.isot
+                except Exception as e:
+                    logger.warning(f"GPS start callback failed: {e}")
 
             # Get current filter
             filter_name = None
@@ -330,7 +369,8 @@ class OptimizedSaveThread(threading.Thread):
                 frames_copy, ts_copy, fs_copy,
                 filepath, dict(self.header_dict), self.object_name,
                 self.cube_index, dict(self.camera_params), filter_name,
-                tel_position, tel_status, self.cube_start_time
+                tel_position, tel_status, self.cube_start_time,
+                gps_copy, gps_start_isot
             )
 
             self.pending_writes.append((filepath, future, time.time()))
@@ -338,6 +378,9 @@ class OptimizedSaveThread(threading.Thread):
             # Reset buffer index and start time for next cube
             self.current_frame_idx = 0
             self.cube_start_time = None
+            # Reset GPS buffer with NaN for next cube
+            if self.gps_buffer is not None:
+                self.gps_buffer.fill(np.nan)
 
         except Exception as e:
             logger.error(f"Write cube error: {e}")

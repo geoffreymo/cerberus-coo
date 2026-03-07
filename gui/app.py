@@ -465,6 +465,15 @@ class CerberusGUI:
             except Exception as e:
                 logger.debug(f"Filter wheel auto-connect failed: {e}")
 
+            # Auto-connect GPS timing device
+            try:
+                if self.api.connect_gps():
+                    logger.info("GPS timing device auto-connected")
+                else:
+                    logger.info("GPS timing device not available for auto-connect")
+            except Exception as e:
+                logger.debug(f"GPS timing auto-connect failed: {e}")
+
         threading.Thread(target=connect_thread, daemon=True).start()
 
     def _auto_connect_filterwheel(self):

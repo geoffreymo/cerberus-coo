@@ -86,6 +86,9 @@ class SystemState:
     current_filter: Optional[str] = None
     available_filters: list = field(default_factory=list)
 
+    # GPS timing state (shared across all cameras)
+    gps_connected: bool = False
+
     # Focus loop state
     focus_loop_running: bool = False
     focus_loop_progress: int = 0
@@ -230,6 +233,9 @@ class SystemState:
                 'connected': self.filterwheel_connected,
                 'current_filter': self.current_filter,
                 'available_filters': self.available_filters,
+            },
+            'gps': {
+                'connected': self.gps_connected,
             },
             'focus_loop': {
                 'running': self.focus_loop_running,
