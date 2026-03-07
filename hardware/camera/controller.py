@@ -284,7 +284,7 @@ class CameraController:
         logger.info("Camera main loop ended")
 
     def _capture_frame(self):
-        """Capture a single frame (matches cerberus_gui_test.py exactly)."""
+        """Capture a single frame using transferinfo for correct buffer position."""
         if self._stop_requested.is_set():
             return
 
@@ -300,12 +300,28 @@ class CameraController:
 
             # Wait for frame
             if self.dcam.wait_capevent_frameready(timeout_ms):
-                frame_index_safe = self._frame_index % self.buffer_size
-                result = self.dcam.buf_getframe_with_timestamp_and_framestamp(frame_index_safe)
+                # Use transferinfo to get the actual newest frame from the camera
+                transferinfo = self.dcam.cap_transferinfo()
+                if transferinfo is False:
+                    return
+
+                newest_index = transferinfo.nNewestFrameIndex
+                camera_frame_count = transferinfo.nFrameCount
+
+                # Detect dropped frames
+                if camera_frame_count > self._frame_index + 1:
+                    dropped = camera_frame_count - self._frame_index - 1
+                    if dropped > 0 and self._frame_index > 0:
+                        logger.warning(f"Dropped {dropped} frames (camera: {camera_frame_count}, ours: {self._frame_index})")
+
+                result = self.dcam.buf_getframe_with_timestamp_and_framestamp(newest_index)
 
                 if result is not False:
                     frame, npBuf, timestamp, framestamp = result
                     frame_copy = np.copy(npBuf)
+
+                    # Sync our frame index with camera's count
+                    self._frame_index = camera_frame_count
 
                     # Release lock before processing so other threads can access DCAM
                     DCamLock.release_capture(self._camera_index)
@@ -379,8 +395,6 @@ class CameraController:
                     callback(frame, corrected_timestamp, corrected_framestamp)
                 except Exception as e:
                     logger.error(f"Error in frame callback: {e}")
-
-        self._frame_index += 1
 
     # === Streaming Control ===
 
