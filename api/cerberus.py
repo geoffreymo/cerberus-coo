@@ -1455,6 +1455,7 @@ class CerberusAPI:
             state_copy.filterwheel_connected = self._state.filterwheel_connected
             state_copy.current_filter = self._state.current_filter
             state_copy.available_filters = self._state.available_filters.copy()
+            state_copy.gps_connected = self._state.gps_connected
             state_copy.focus_loop_running = self._state.focus_loop_running
             state_copy.focus_loop_progress = self._state.focus_loop_progress
             state_copy.focus_loop_total_steps = self._state.focus_loop_total_steps
