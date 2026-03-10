@@ -12,8 +12,8 @@
         "defaults": {
             "READOUT_SPEED": 1.0,
             "EXPOSURE_TIME": 1.0,
-            "TRIGGER_MODE": 1.0,
-            "TRIGGER_SOURCE": 1.0,
+            "TRIGGER_MODE": 6.0,
+            "TRIGGER_SOURCE": 2.0,
             "TRIGGER_POLARITY": 2.0,
             "OUTPUT_TRIG_KIND_0": 3.0,
             "OUTPUT_TRIG_SOURCE_0": 2.0,
