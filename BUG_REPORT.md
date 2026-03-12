@@ -407,6 +407,33 @@ invalid command name "123548904157376<lambda>"
 
 ---
 
+### 45. N Frames Auto-Stop Broken (Stale State Copy)
+**File:** `gui/panels/camera_controls.py:281,323`
+
+N Frames mode never auto-stops. `cam_state = self.api.state.get_camera(...)` at line 281 gets a **deep copy** (the `state` property returns a copy). Then `start_streaming()` resets `frames_captured = 0` on the real state, but `self._start_frame_count = cam_state.frames_captured` reads the stale copy (e.g., 397 from previous run). `_check_image_progress` computes a negative difference that never reaches `_target_frames`.
+
+**Fix:** Set `self._start_frame_count = 0` since `start_streaming` always resets the counter.
+
+---
+
+### 46. GUI Thread Blocks on DCAM Property Reads During Long Exposures
+**File:** `gui/app.py:417-430`, `api/cerberus.py:1466-1564`
+
+At long exposures (60s), `_update_status()` runs on the GUI thread and calls `api.update_status()`, which does blocking DCAM `prop_getvalue()` calls (exposure, temperature). These can block for seconds at the driver level, freezing the entire GUI — timer jumps, frame counter appears stuck, buttons unresponsive.
+
+**Fix:** Move `update_status()` hardware reads to a background thread, push results to GUI via `after()`.
+
+---
+
+### 47. Mangled Framestamps/Timestamps at Very High Frame Rates
+**File:** `hardware/camera/controller.py`
+
+At 0.5ms exposures (~2 kHz), framestamp and timestamp values in saved FITS files are corrupted. Not yet investigated — may be related to `buf_getframe_with_timestamp_and_framestamp` overhead (2 extra DCAM prop calls per frame for FRAMEBUNDLE_MODE check) or capture thread not keeping up.
+
+**Priority:** Low — primary use case is 10 Hz or slower.
+
+---
+
 ## Priority Order for Fixes
 
 ### Immediate (Safety Critical)
