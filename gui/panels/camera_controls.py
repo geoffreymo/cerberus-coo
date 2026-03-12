@@ -288,6 +288,11 @@ class CameraControlsPanel(ttk.LabelFrame):
             # Stop streaming timer
             self._stop_stream_timer()
 
+            # Stop guiding if active
+            if self._display_panel and self._display_panel._guiding_engine.enabled:
+                self._display_panel._guiding_enabled_var.set(False)
+                self._display_panel._stop_guiding()
+
             # Brief pause for in-flight frames to be delivered
             import time
             if cam_state.is_saving:
