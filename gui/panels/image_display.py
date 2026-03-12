@@ -649,8 +649,20 @@ class ImageDisplayPanel(ttk.LabelFrame):
             if len(self._fwhm_history) > self._fwhm_history_max:
                 self._fwhm_history = self._fwhm_history[-self._fwhm_history_max:]
 
-            # Feed centroid to guiding engine
-            self._guiding_engine.add_measurement(centroid_offset[0], centroid_offset[1])
+            # Track star: update FWHM target to follow centroid so the box
+            # stays centered on the star as it drifts
+            half_box = self._fwhm_box_size // 2
+            dx, dy = centroid_offset
+            edge_margin = half_box * 0.6  # reject if centroid > 60% from center
+
+            if abs(dx) < edge_margin and abs(dy) < edge_margin:
+                # Good measurement — update target to track star and feed to guiding
+                cx, cy = self._fwhm_target
+                self._fwhm_target = (cx + int(round(dx)), cy + int(round(dy)))
+                self._guiding_engine.add_measurement(centroid_offset[0], centroid_offset[1])
+            else:
+                # Centroid near box edge — star may be leaving, don't guide on this
+                logger.debug(f"Skipping guiding measurement: centroid offset ({dx:.1f}, {dy:.1f}) near box edge")
 
             # Update display
             self.fwhm_var.set(f"{fwhm_arcsec:.3f}\"")
