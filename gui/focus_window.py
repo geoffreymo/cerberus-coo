@@ -189,7 +189,7 @@ class FocusWindow(tk.Toplevel):
         self.start_pos_var = tk.StringVar(value="30.0")
         self.end_pos_var = tk.StringVar(value="45.0")
         self.step_var = tk.StringVar(value="0.25")
-        self.base_exposure_var = tk.StringVar(value="100")  # Base exposure in ms
+        self.base_exposure_var = tk.StringVar(value="1.0")  # Base exposure in seconds
         self.progress_var = tk.StringVar(value="Idle")
 
         # Manual focus controls
@@ -268,7 +268,7 @@ class FocusWindow(tk.Toplevel):
         row3.pack(fill=tk.X, pady=2)
         ttk.Label(row3, text="Base (Clear):").pack(side=tk.LEFT)
         ttk.Entry(row3, textvariable=self.base_exposure_var, width=8).pack(side=tk.LEFT, padx=5)
-        ttk.Label(row3, text="ms").pack(side=tk.LEFT)
+        ttk.Label(row3, text="s").pack(side=tk.LEFT)
 
         # Multiplier info
         info_text = ttk.Label(
@@ -387,7 +387,7 @@ class FocusWindow(tk.Toplevel):
             start = float(self.start_pos_var.get())
             end = float(self.end_pos_var.get())
             step = float(self.step_var.get())
-            base_exposure_ms = float(self.base_exposure_var.get())
+            base_exposure_sec = float(self.base_exposure_var.get())
         except ValueError:
             self.progress_var.set("Error: Invalid parameters")
             return
@@ -411,7 +411,7 @@ class FocusWindow(tk.Toplevel):
             # Run simulation in background thread
             self._focus_thread = threading.Thread(
                 target=self._run_simulated_focus_loop,
-                args=(start, end, step, base_exposure_ms, filters, optimal_focus),
+                args=(start, end, step, base_exposure_sec, filters, optimal_focus),
                 daemon=True
             )
             self._focus_thread.start()
@@ -441,13 +441,13 @@ class FocusWindow(tk.Toplevel):
         # Run in background thread
         self._focus_thread = threading.Thread(
             target=self._run_focus_loop,
-            args=(start, end, step, base_exposure_ms, filters),
+            args=(start, end, step, base_exposure_sec, filters),
             daemon=True
         )
         self._focus_thread.start()
 
     def _run_focus_loop(self, start: float, end: float, step: float,
-                        base_exposure_ms: float, filters: List[str]):
+                        base_exposure_sec: float, filters: List[str]):
         """Run focus loop in background thread."""
         try:
             import time
@@ -456,9 +456,6 @@ class FocusWindow(tk.Toplevel):
             # Create date-based directory structure matching regular captures
             date_str = time.strftime('%Y_%m_%d')
             output_dir = f"/data/cerberus/captures_{date_str}/focus"
-
-            # Convert base exposure to seconds
-            base_exposure_sec = base_exposure_ms / 1000.0
 
             # Create filter-specific exposure times using multipliers
             filter_exposures = {}
@@ -515,7 +512,7 @@ class FocusWindow(tk.Toplevel):
             self.after(0, self._focus_complete)
 
     def _run_simulated_focus_loop(self, start: float, end: float, step: float,
-                                   base_exposure_ms: float, filters: List[str],
+                                   base_exposure_sec: float, filters: List[str],
                                    optimal_focus: float):
         """Run focus loop with simulated hardware."""
         try:
@@ -525,9 +522,6 @@ class FocusWindow(tk.Toplevel):
             # Create date-based directory structure
             date_str = time.strftime('%Y_%m_%d')
             output_dir = f"/tmp/cerberus_focus_sim_{date_str}"
-
-            # Convert base exposure to seconds
-            base_exposure_sec = base_exposure_ms / 1000.0
 
             # Create filter-specific exposure times
             filter_exposures = {}
