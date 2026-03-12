@@ -92,6 +92,7 @@
         "correction_interval_seconds": 5.0,
         "guide_gain": 0.8,
         "x_to_ra_sign": -1,
-        "y_to_dec_sign": -1
+        "y_to_dec_sign": -1,
+        "min_samples": 3
     }
 }

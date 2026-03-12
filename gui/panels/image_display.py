@@ -114,15 +114,11 @@ class ImageDisplayPanel(ttk.LabelFrame):
         self._lightcurve_fig = None
         self._last_photometry_time = 0  # Rate limiting
 
-        # Guiding state
-        self._guiding_config = config.guiding
-        self._guiding_enabled = False
-        self._guiding_calibrating = False
-        self._guiding_reference: Optional[Tuple[float, float]] = None  # (x, y) reference position in pixels
-        self._position_history: list = []  # [(timestamp, x_offset, y_offset), ...]
-        self._last_correction_time = 0
-        self._last_guiding_log_time = 0  # For periodic drift logging
-        self._guiding_calibration_start = 0  # When calibration started
+        # Guiding engine
+        from ...guiding.engine import GuidingEngine
+        self._guiding_engine = GuidingEngine(
+            config.guiding, self._plate_scale, self._guiding_correction_callback
+        )
 
         self._create_widgets()
 
@@ -633,15 +629,8 @@ class ImageDisplayPanel(ttk.LabelFrame):
             if len(self._fwhm_history) > self._fwhm_history_max:
                 self._fwhm_history = self._fwhm_history[-self._fwhm_history_max:]
 
-            # Update position history for guiding
-            self._position_history.append((timestamp, centroid_offset[0], centroid_offset[1]))
-
-            # Trim position history (keep 2x averaging window worth)
-            max_history_seconds = self._guiding_config.averaging_window_seconds * 2
-            cutoff_time = timestamp - max_history_seconds
-            self._position_history = [
-                (t, x, y) for t, x, y in self._position_history if t >= cutoff_time
-            ]
+            # Feed centroid to guiding engine
+            self._guiding_engine.add_measurement(centroid_offset[0], centroid_offset[1])
 
             # Update display
             self.fwhm_var.set(f"{fwhm_arcsec:.3f}\"")
@@ -830,16 +819,16 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 else:
                     self._display_scale_factor = 1.0
 
-                # Update FWHM measurement (throttled - every 5th frame)
-                if self._fwhm_target is not None and self._frame_count % 5 == 0:
+                # Update FWHM measurement (every frame)
+                if self._fwhm_target is not None:
                     self._update_fwhm(frame)
 
                 # Update photometry measurement
                 self._update_photometry(frame)
 
-                # Update guiding (throttled - every 10th frame, ~5 Hz)
-                if self._guiding_enabled and self._frame_count % 10 == 0:
-                    self._update_guiding()
+                # Update guiding status display
+                if self._guiding_engine.enabled:
+                    self._guiding_status_var.set(self._guiding_engine.status)
 
                 # Draw ROI rectangle if selecting
                 display_frame = self._draw_roi_overlay(display_frame)
@@ -998,161 +987,27 @@ class ImageDisplayPanel(ttk.LabelFrame):
             return
 
         logger.info("Starting guiding calibration...")
-        self._guiding_enabled = True
-        self._guiding_calibrating = True
-        self._guiding_reference = None
-        self._position_history = []
-        self._guiding_calibration_start = time.time()
-        self._last_correction_time = 0
-        self._guiding_status_var.set("Calibrating...")
+        self._guiding_engine.start()
+        self._guiding_status_var.set(self._guiding_engine.status)
 
     def _stop_guiding(self):
         """Stop guiding."""
         logger.info("Stopping guiding")
-        self._guiding_enabled = False
-        self._guiding_calibrating = False
-        self._guiding_reference = None
-        self._guiding_status_var.set("Not guiding")
+        self._guiding_engine.stop()
+        self._guiding_status_var.set(self._guiding_engine.status)
 
     def _reset_guiding_reference(self):
         """Reset and recalibrate reference position."""
-        if not self._guiding_enabled:
+        if not self._guiding_engine.enabled:
             return
 
         logger.info("Resetting guiding reference - recalibrating...")
-        self._guiding_calibrating = True
-        self._guiding_reference = None
-        self._position_history = []
-        self._guiding_calibration_start = time.time()
-        self._guiding_status_var.set("Calibrating...")
+        self._guiding_engine.reset_reference()
+        self._guiding_status_var.set(self._guiding_engine.status)
 
-    def _compute_average_position(self, window_seconds: float) -> Optional[Tuple[float, float]]:
-        """
-        Compute average centroid position over time window.
-
-        Args:
-            window_seconds: Time window in seconds
-
-        Returns:
-            (avg_x, avg_y) or None if insufficient data
-        """
-        if not self._position_history:
-            return None
-
-        now = time.time()
-        cutoff = now - window_seconds
-
-        # Filter to recent positions
-        recent = [(t, x, y) for t, x, y in self._position_history if t >= cutoff]
-
-        if len(recent) < 3:  # Need at least 3 samples
-            return None
-
-        avg_x = np.mean([x for _, x, _ in recent])
-        avg_y = np.mean([y for _, _, y in recent])
-
-        return (float(avg_x), float(avg_y))
-
-    def _update_guiding(self):
-        """
-        Update guiding state and apply corrections if needed.
-
-        Called from display loop when guiding is enabled.
-        """
-        if not self._guiding_enabled:
-            return
-
-        now = time.time()
-        window = self._guiding_config.averaging_window_seconds
-
-        if self._guiding_calibrating:
-            # In calibration mode - collecting reference position
-            elapsed = now - self._guiding_calibration_start
-            remaining = window - elapsed
-
-            if remaining > 0:
-                self._guiding_status_var.set(f"Calibrating... {remaining:.1f}s")
-            else:
-                # Calibration complete - compute reference
-                ref = self._compute_average_position(window)
-                if ref is not None:
-                    self._guiding_reference = ref
-                    self._guiding_calibrating = False
-                    self._last_correction_time = now
-                    logger.info(f"Guiding reference set: ({ref[0]:.2f}, {ref[1]:.2f}) pixels")
-                    self._guiding_status_var.set("Guiding active")
-                else:
-                    # Not enough data, extend calibration
-                    self._guiding_status_var.set("Calibrating... (waiting for data)")
-        else:
-            # Active guiding - compare current position to reference
-            current = self._compute_average_position(window)
-
-            if current is None or self._guiding_reference is None:
-                self._guiding_status_var.set("Guiding (waiting for data)")
-                return
-
-            # Compute drift in pixels
-            drift_x = current[0] - self._guiding_reference[0]
-            drift_y = current[1] - self._guiding_reference[1]
-
-            # Convert to arcseconds
-            drift_x_arcsec = drift_x * self._plate_scale
-            drift_y_arcsec = drift_y * self._plate_scale
-            drift_total_arcsec = np.sqrt(drift_x_arcsec**2 + drift_y_arcsec**2)
-
-            # Update status
-            self._guiding_status_var.set(
-                f"Drift: {drift_total_arcsec:.2f}\" ({drift_x_arcsec:+.2f}, {drift_y_arcsec:+.2f})"
-            )
-
-            # Check if correction is needed
-            threshold = self._guiding_config.correction_threshold_arcsec
-            interval = self._guiding_config.correction_interval_seconds
-
-            # Periodic drift logging (every correction interval)
-            if (now - self._last_guiding_log_time) >= interval:
-                self._last_guiding_log_time = now
-                if drift_total_arcsec >= threshold:
-                    logger.info(f"GUIDING: drift={drift_total_arcsec:.2f}\" (RA:{drift_x_arcsec:+.2f}\", Dec:{drift_y_arcsec:+.2f}\") - correction needed")
-                else:
-                    logger.info(f"GUIDING: drift={drift_total_arcsec:.2f}\" (RA:{drift_x_arcsec:+.2f}\", Dec:{drift_y_arcsec:+.2f}\") - within threshold ({threshold:.2f}\")")
-
-            if drift_total_arcsec >= threshold and (now - self._last_correction_time) >= interval:
-                self._apply_guiding_correction(drift_x_arcsec, drift_y_arcsec)
-
-    def _apply_guiding_correction(self, drift_x_arcsec: float, drift_y_arcsec: float):
-        """
-        Apply a guiding correction to the telescope.
-
-        Args:
-            drift_x_arcsec: X drift in arcseconds (pixel coordinates)
-            drift_y_arcsec: Y drift in arcseconds (pixel coordinates)
-        """
-        config = self._guiding_config
-
-        # Apply coordinate sign mapping and gain
-        ra_correction = drift_x_arcsec * config.x_to_ra_sign * config.guide_gain
-        dec_correction = drift_y_arcsec * config.y_to_dec_sign * config.guide_gain
-
-        # Apply max correction limit
-        max_corr = config.max_correction_arcsec
-        ra_correction = np.clip(ra_correction, -max_corr, max_corr)
-        dec_correction = np.clip(dec_correction, -max_corr, max_corr)
-
-        # Apply correction
-        logger.info(f"Applying guiding correction: RA={ra_correction:+.3f}\", Dec={dec_correction:+.3f}\"")
-
-        try:
-            success = self.api.move_offset(ra_correction, dec_correction)
-            if success:
-                self._last_correction_time = time.time()
-                # Clear position history after correction to let new reference settle
-                self._position_history = []
-            else:
-                logger.warning("Guiding correction failed")
-        except Exception as e:
-            logger.error(f"Error applying guiding correction: {e}")
+    def _guiding_correction_callback(self, ra_arcsec: float, dec_arcsec: float) -> bool:
+        """Callback for GuidingEngine to apply telescope corrections."""
+        return self.api.move_offset(ra_arcsec, dec_arcsec)
 
     def cleanup(self):
         """Cleanup resources."""

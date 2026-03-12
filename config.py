@@ -118,6 +118,7 @@ class GuidingConfig:
     # Coordinate mapping (depends on camera orientation)
     x_to_ra_sign: int = -1  # +1 or -1: how +X pixel maps to RA
     y_to_dec_sign: int = -1  # +1 or -1: how +Y pixel maps to Dec
+    min_samples: int = 3  # Minimum centroid samples for calibration/averaging
 
 
 @dataclass
