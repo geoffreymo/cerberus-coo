@@ -192,9 +192,13 @@ class FocusPanel(ttk.LabelFrame):
             import time
             from ...focusloop import FocusLoopConfig
 
+            # Get camera ID for directory/filename
+            cam_state = self.api.state.get_camera(0)
+            camera_id = cam_state.camera_id or "cam0"
+
             # Create date-based directory structure matching regular captures
             date_str = time.strftime('%Y_%m_%d')
-            output_dir = f"/data/cerberus/captures_{date_str}/focus"
+            output_dir = f"/data/cerberus/captures_{date_str}/{camera_id}/focus"
 
             # Create filter-specific exposure times using multipliers
             filter_exposures = {}
@@ -210,7 +214,8 @@ class FocusPanel(ttk.LabelFrame):
                 exposure_time=exposure,
                 filter_exposures=filter_exposures,
                 filters=filters,
-                output_dir=output_dir
+                output_dir=output_dir,
+                camera_id=camera_id
             )
 
             # Progress callback - MUST use after() for thread safety with Tkinter

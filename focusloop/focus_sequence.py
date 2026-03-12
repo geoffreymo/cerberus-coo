@@ -42,6 +42,7 @@ class FocusLoopConfig:
     # Output
     output_dir: str = "/tmp/cerberus_focus"
     object_name: str = "focus"
+    camera_id: str = ""  # Camera identifier for filenames (e.g., "PHX2")
 
     # Behavior
     settle_time: float = 2.0  # seconds after focus move
@@ -229,10 +230,11 @@ class FocusLoop:
 
         # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cam = f"_{self.config.camera_id}" if self.config.camera_id else ""
         if filter_name:
-            filename = f"{timestamp}_focus_{position:.2f}_{filter_name}.fits"
+            filename = f"{timestamp}{cam}_focus_{position:.2f}_{filter_name}.fits"
         else:
-            filename = f"{timestamp}_focus_{position:.2f}.fits"
+            filename = f"{timestamp}{cam}_focus_{position:.2f}.fits"
 
         filepath = os.path.join(self.config.output_dir, filename)
 
