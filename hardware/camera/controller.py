@@ -116,6 +116,7 @@ class CameraController:
         self._capturing = False
         self._stop_requested = threading.Event()
         self._frame_index = 0
+        self._last_validated_framestamp = -1  # For framestamp gap detection
 
         # Frame callbacks
         self._frame_callbacks: List[Callable] = []
@@ -342,25 +343,23 @@ class CameraController:
                 # npBuf is already a fresh copy from dcambuf_copyframe — no np.copy needed
                 frame, npBuf, timestamp, framestamp = result
 
-                # Validate framestamp to detect mid-batch buffer overflow
-                if not skip_validation:
-                    expected_framestamp = self._frame_index % 65536
-                    actual_framestamp = framestamp % 65536
-                    if actual_framestamp != expected_framestamp:
-                        if actual_framestamp > expected_framestamp:
-                            gap = actual_framestamp - expected_framestamp
+                # Validate framestamp by comparing to previous (not to _frame_index).
+                # _frame_index is purely for ring buffer addressing and must never skip slots.
+                if not skip_validation and self._last_validated_framestamp >= 0:
+                    actual_fs = framestamp % 65536
+                    expected_fs = (self._last_validated_framestamp + 1) % 65536
+                    if actual_fs != expected_fs:
+                        if actual_fs > expected_fs:
+                            gap = actual_fs - expected_fs
                         else:
-                            gap = (65536 - expected_framestamp) + actual_framestamp
+                            gap = (65536 - expected_fs) + actual_fs
                         if gap < self.buffer_size:
-                            logger.warning(f"Mid-batch overflow: lost {gap} frames, "
-                                           f"jumping from {self._frame_index} to {self._frame_index + gap}")
-                            self._frame_index += gap
+                            logger.warning(f"Framestamp gap: expected {expected_fs}, got {actual_fs} "
+                                           f"(skipped {gap} framestamps at frame_index {self._frame_index})")
                         else:
-                            logger.warning(f"Framestamp mismatch ({gap}), resyncing to actual framestamp")
+                            logger.warning(f"Framestamp mismatch ({gap}), disabling validation")
                             skip_validation = True
-                elif i == 0:
-                    # After overflow jump, resync frame_index to actual framestamp
-                    logger.info(f"Resyncing frame_index to framestamp {framestamp}")
+                self._last_validated_framestamp = framestamp % 65536
 
                 self._process_frame(npBuf, timestamp, framestamp)
 
@@ -493,6 +492,7 @@ class CameraController:
 
             # Initialize capture state
             self._frame_index = 0
+            self._last_validated_framestamp = -1
             self._frame_count = 0
             self._fps_calc_time = time.time()
 
