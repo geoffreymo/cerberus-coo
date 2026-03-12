@@ -31,7 +31,7 @@ class FocusPanel(ttk.LabelFrame):
         # Variables
         self.start_pos_var = tk.StringVar(value="30.0")
         self.end_pos_var = tk.StringVar(value="45.0")
-        self.step_var = tk.StringVar(value="2.5")
+        self.step_var = tk.StringVar(value="0.25")
         self.exposure_var = tk.StringVar(value="5.0")
         self.progress_var = tk.StringVar(value="Idle")
 
