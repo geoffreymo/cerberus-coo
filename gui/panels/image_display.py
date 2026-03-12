@@ -403,16 +403,19 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 self._set_fwhm_target(img_x, img_y)
 
     def _display_to_image_coords(self, display_x: int, display_y: int) -> Tuple[int, int]:
-        """Convert display window coordinates to image coordinates."""
+        """Convert display window coordinates to image coordinates.
+
+        Accounts for horizontal flip (east-left convention) and scale factor.
+        """
         if self._last_frame is None:
             return display_x, display_y
 
         img_height, img_width = self._last_frame.shape[:2]
-
-        # Convert display coords to image coords using tracked scale factor (like v18)
-        # When we scale up small frames, we divide mouse coords by that factor
         scale = self._display_scale_factor
-        img_x = int(display_x / scale)
+
+        # Un-flip X (display is horizontally flipped for east-left)
+        display_width = int(img_width * scale)
+        img_x = int((display_width - 1 - display_x) / scale)
         img_y = int(display_y / scale)
 
         # Clamp to image bounds
@@ -420,6 +423,23 @@ class ImageDisplayPanel(ttk.LabelFrame):
         img_y = max(0, min(img_y, img_height - 1))
 
         return img_x, img_y
+
+    def _image_to_display_coords(self, img_x: float, img_y: float) -> Tuple[int, int]:
+        """Convert image coordinates to display coordinates.
+
+        Accounts for horizontal flip (east-left convention) and scale factor.
+        """
+        if self._last_frame is None:
+            return int(img_x), int(img_y)
+
+        img_height, img_width = self._last_frame.shape[:2]
+        scale = self._display_scale_factor
+
+        # Flip X for east-left display
+        dx = int((img_width - 1 - img_x) * scale)
+        dy = int(img_y * scale)
+
+        return dx, dy
 
     def _finish_roi_selection(self):
         """Finish ROI selection and apply windowing."""
@@ -724,10 +744,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
         if len(display_frame.shape) == 2:
             display_frame = cv2.cvtColor(display_frame, cv2.COLOR_GRAY2BGR)
 
-        # Convert image coordinates to display coordinates
+        # Convert image coordinates to display coordinates (with flip)
+        cx, cy = self._image_to_display_coords(self._fwhm_target[0], self._fwhm_target[1])
         scale = self._display_scale_factor
-        cx = int(self._fwhm_target[0] * scale)
-        cy = int(self._fwhm_target[1] * scale)
         radius = int(self._fwhm_box_size * scale / 2)
 
         # Draw circle (magenta for FWHM to distinguish from photometry)
@@ -819,6 +838,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 else:
                     self._display_scale_factor = 1.0
 
+                # Flip horizontally for north-up, east-left convention
+                display_frame = cv2.flip(display_frame, 1)
+
                 # Update FWHM measurement (every frame)
                 if self._fwhm_target is not None:
                     self._update_fwhm(frame)
@@ -898,12 +920,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
         if len(display_frame.shape) == 2:
             display_frame = cv2.cvtColor(display_frame, cv2.COLOR_GRAY2BGR)
 
-        # Convert image coordinates to display coordinates using scale factor
-        scale = self._display_scale_factor
-        x1 = int(self._roi_start_point[0] * scale)
-        y1 = int(self._roi_start_point[1] * scale)
-        x2 = int(self._roi_end_point[0] * scale)
-        y2 = int(self._roi_end_point[1] * scale)
+        # Convert image coordinates to display coordinates (with flip)
+        x1, y1 = self._image_to_display_coords(self._roi_start_point[0], self._roi_start_point[1])
+        x2, y2 = self._image_to_display_coords(self._roi_end_point[0], self._roi_end_point[1])
 
         # Draw rectangle (green, 2px thick)
         cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -1189,8 +1208,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         # Draw target aperture (green)
         if self._target_aperture is not None:
-            x, y = self._target_aperture
-            dx, dy = int(x * scale), int(y * scale)
+            dx, dy = self._image_to_display_coords(*self._target_aperture)
             cv2.circle(display_frame, (dx, dy), r_ap, (0, 255, 0), 2)  # Aperture
             cv2.circle(display_frame, (dx, dy), r_in, (0, 255, 0), 2)  # Inner annulus
             cv2.circle(display_frame, (dx, dy), r_out, (0, 255, 0), 2)  # Outer annulus
@@ -1199,8 +1217,7 @@ class ImageDisplayPanel(ttk.LabelFrame):
 
         # Draw comparison aperture (cyan)
         if self._comparison_aperture is not None:
-            x, y = self._comparison_aperture
-            dx, dy = int(x * scale), int(y * scale)
+            dx, dy = self._image_to_display_coords(*self._comparison_aperture)
             cv2.circle(display_frame, (dx, dy), r_ap, (255, 255, 0), 2)  # Aperture
             cv2.circle(display_frame, (dx, dy), r_in, (255, 255, 0), 2)  # Inner annulus
             cv2.circle(display_frame, (dx, dy), r_out, (255, 255, 0), 2)  # Outer annulus
