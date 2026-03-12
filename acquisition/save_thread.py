@@ -76,7 +76,7 @@ def write_fits_cube(
 
         # GPS timing header
         if gps_start_isot:
-            primary_hdr['GPSSTART'] = (gps_start_isot, 'GPS time at capture start (ISO-T)')
+            primary_hdr['GPSSTART'] = (gps_start_isot, 'GPS time at end of first frame readout (ISO-T)')
 
         # Additional header items
         for key, value in header_dict.items():

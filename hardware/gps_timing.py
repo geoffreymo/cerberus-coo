@@ -6,7 +6,7 @@ Provides precision timestamps from User Capture (UCAP) buffer,
 which records the GPS time of each incoming pulse with nanosecond precision.
 
 The UCAP buffer is used to timestamp:
-1. The initial PPS pulse that starts capture (GPSSTART)
+1. The READOUTEND pulse from the first frame (GPSSTART)
 2. Each READOUTEND pulse from the camera (GPSTIME array)
 """
 
@@ -53,7 +53,7 @@ class GPSTimingDevice:
 
     The UCAP (User Capture) buffer records timestamps of external pulses
     with GPS precision. We use this to timestamp:
-    1. The initial PPS pulse that starts capture (GPSSTART)
+    1. The READOUTEND pulse from the first frame (GPSSTART)
     2. Each READOUTEND pulse from the camera (GPSTIME array)
 
     Usage:
