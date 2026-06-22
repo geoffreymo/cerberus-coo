@@ -434,6 +434,43 @@ At 0.5ms exposures (~2 kHz), framestamp and timestamp values in saved FITS files
 
 ---
 
+### 48. Sporadic Camera Timing Stalls (Hardware-Level)
+**File:** N/A — hardware/firmware issue
+**Data:** `/data/cerberus/captures_2026_03_12/PHX2/`
+
+Camera occasionally produces frame intervals much longer than expected (e.g., 2s instead of 1s, 19s instead of 10s). The extra delay is approximately one full exposure cycle. Both camera timestamps and GPS confirm the stall. Gets worse over the course of an observing session.
+
+**Two patterns observed:**
+- **Pattern 1 (majority):** Camera TIMESTAMP and GPS READOUTEND agree perfectly — both see the stall on the same frame. A genuine camera stall.
+- **Pattern 2 (later in session):** Camera TIMESTAMP and GPS disagree by one frame — camera attributes the stall to frame N, GPS attributes it to frame N+1. Once this desync occurs it persists for the rest of the cube. Caused by the camera's internal timestamp and READOUTEND pulse being assigned at different pipeline stages.
+
+**Key data points:**
+- Old data (2026-01-09, different camera, no OUTPUT_TRIG): 35 files, 1439 frames, zero anomalies
+- March 2026 data (PHX2, OUTPUT_TRIG enabled): frequent anomalies, worsening over the session
+- Increasing pulse width from 1µs to 5µs did NOT help
+- Office test at 0.5s exposures on PHX3: clean (220 frames, 0% deviation)
+- Pattern 2 produces a persistent one-frame GPS offset (confirmed via cumulative cam-gps elapsed time analysis on cube015)
+
+**Hypotheses (ordered by testability):**
+1. Camera-specific hardware issue (Jan data was a different camera unit)
+2. OUTPUT_TRIG configuration interfering with exposure/readout cycle
+3. CoaXPress fiber path differences (different fiber run at telescope vs Jan)
+
+**TODO:** Reproduce in office over fiber → test all 3 cameras → disable OUTPUT_TRIG → compare fiber paths. See memory file `project_timing_glitch_investigation.md`.
+
+**Impact on data:** Pattern 2 means GPSTIME column is shifted by one frame for affected cubes. Reduction pipelines using GPS timestamps should check for cam/GPS consistency.
+
+---
+
+### 49. GPS UCAP Edge Filtering Missing
+**File:** `hardware/gps_timing.py:207-264`
+
+`get_timestamp()` pops the next UCAP entry from the Meinberg FIFO without checking whether it's a rising or falling edge (the `signal` field is stored but never inspected). The Meinberg TCR180PEX captures on both rising and falling edges. Currently the 5µs pulse width means the falling edge arrives too quickly for the Meinberg to register as a separate capture, so this hasn't caused problems. But a longer pulse width or different trigger configuration could produce two UCAP entries per frame, shifting all GPS-to-frame associations.
+
+**Fix:** Filter on `signal` field to only accept rising edges (or whichever edge corresponds to READOUTEND), or verify that the Meinberg only captures one edge per pulse at the configured width.
+
+---
+
 ## Priority Order for Fixes
 
 ### Immediate (Safety Critical)
