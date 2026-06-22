@@ -515,9 +515,6 @@ class CameraController:
                 pass
 
             if self._gps_device is not None:
-                self._gps_device.clear_buffer()
-                logger.info("GPS UCAP buffer cleared for capture")
-
                 if frame_rate and frame_rate > 121:
                     self._gps_per_frame = False
                     logger.info(f"Frame rate {frame_rate:.1f} Hz > 121 Hz: GPS tagging first frame only")
@@ -545,6 +542,11 @@ class CameraController:
                 if wait_time > 0:
                     logger.info(f"Syncing: waiting {wait_time*1000:.1f}ms")
                     time.sleep(wait_time)
+
+            # Clear GPS buffer right before cap_start to avoid stale pulses
+            # from the alignment wait period
+            if self._gps_device is not None:
+                self._gps_device.clear_buffer()
 
             self.time_before_cap_start = time.time()
 
