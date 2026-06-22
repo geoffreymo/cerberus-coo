@@ -9,6 +9,7 @@ configuration parameters.
 import os
 import json
 import logging
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
 
@@ -16,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 # Default config file location (same directory as this module)
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
+
+def observing_night_str() -> str:
+    """Return date string for the current observing night (rolls over at noon, not midnight)."""
+    return (datetime.now() - timedelta(hours=12)).strftime('%Y_%m_%d')
 
 
 @dataclass

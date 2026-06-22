@@ -197,7 +197,8 @@ class FocusPanel(ttk.LabelFrame):
             camera_id = cam_state.camera_id or "cam0"
 
             # Create date-based directory structure matching regular captures
-            date_str = time.strftime('%Y_%m_%d')
+            from config import observing_night_str
+            date_str = observing_night_str()
             output_dir = f"/data/cerberus/captures_{date_str}/{camera_id}/focus"
 
             # Create filter-specific exposure times using multipliers

@@ -564,9 +564,9 @@ class CerberusAPI:
 
         # Create date-based subdirectory with camera ID inside
         # Structure: output_dir/captures_YYYY_MM_DD/PHX2/
-        from datetime import datetime
+        from config import observing_night_str
         import os
-        date_str = datetime.now().strftime('%Y_%m_%d')
+        date_str = observing_night_str()
         save_folder = os.path.join(output_dir, f"captures_{date_str}", camera_id)
 
         # Create filter callback
