@@ -1,102 +1,85 @@
-# python-package-template
-This is a template on how to package a simple Python project
+# Cerberus COO
 
-## Table of Contents
+Control software for the Cerberus high-speed imager (Hamamatsu qCMOS cameras,
+Palomar P200 TCS, ZWO filter wheel, Meinberg GPS timing).
 
-1. Installation
-2. Setting Up Your Package
-3. Installing Dependencies
-4. Building Your Package
-5. Publishing to PyPI
+```
+api/           CerberusAPI - single entry point used by both GUIs and scripts
+hardware/      Device controllers: camera (DCAM), telescope (haletcs), GPS timing
+filterwheel/   ZWO EFW filter wheel
+acquisition/   Save thread: frames -> FITS cubes (astropy)
+focusloop/     Automated focus sequence + SExtractor FWHM analysis
+guiding/       Autoguiding engine (pure logic, no GUI dependency)
+gui/           Tkinter GUI (original)
+gui_qt/        PyQt6 GUI (new; the version to move to)
+simulation/    Simulated camera / telescope / filter wheel / GPS for hardware-free runs
+tests/         pytest suite (API against simulated hardware, scripted Qt GUI session)
+docs/          Code-review reports
+config.json    Runtime configuration
+```
 
-## Installation
+## Environment
 
-To install the package in editable mode (ideal for development), follow these steps:
-
-### Requirements
-
-- Python 3.7 or higher
-- `pip` (ensure it's the latest version)
-- `setuptools` 42 or higher (for building the package)
-
-### 1. Clone the repository
-
-First, clone the repository to your local machine:
+Everything runs in the `qcmos-control` conda environment (Python 3.12, PyQt6,
+numpy, scipy, astropy, matplotlib, haletcs, SExtractor):
 
 ```bash
-git clone https://github.com/yourusername/your-package-name.git
-cd your-package-name
+conda activate qcmos-control
+cd ~/cerberus/cerberus-coo
 ```
 
-### 2. Set Up Your Python Environment
+The package is installed in editable mode as `cerberus_coo`.
 
-Create a virtual environment for your package:
+## Running
+
+Tkinter GUI (original):
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+python -m cerberus_coo                 # all connected cameras
+python -m cerberus_coo --list-cameras
 ```
 
-### 3. Install Build Dependencies
-
-Make sure setuptools and pip are up to date:
+PyQt6 GUI:
 
 ```bash
-pip install --upgrade pip setuptools wheel
+python -m cerberus_coo.gui_qt          # real hardware
+python -m cerberus_coo.gui_qt --sim    # simulated hardware, no cameras/TCS needed
+python -m cerberus_coo.gui_qt --help   # --sim-cameras N, --sim-size WxH, --light, --font-size, --no-autoconnect, --config
 ```
 
-## Setting Up Your Package
-### 1. Update pyproject.toml
+`--sim` runs the *real* API, save thread, focus loop and SExtractor against a
+synthetic sky: star FWHM follows the simulated telescope focus, the field drifts
+slowly (guiding corrects it), one star is variable (photometry), and subarray /
+binning are honoured. Simulated data goes to `/tmp/cerberus_sim`; the real
+`config.json` is never written in simulation mode.
 
-The pyproject.toml file contains the configuration for building and packaging your Python project. You'll want to customize this to reflect your package's name, version, dependencies, license, etc.
-```yml
-    name: The name of your package.
-    version: The version of your package (e.g., "0.1.0").
-    dependencies: List any runtime dependencies your package requires (e.g., requests, numpy).
-    license: Specify your package's license, either as text or a file. For example:
-        license = { text = "MIT" }
-        Or, if you have a LICENSE file: license = { file = "LICENSE.txt" }
-```
+### Qt GUI quick reference
 
-### 2. Update README.md
+* One tab per camera; Start/Stop, Save, exposure with unit selector, N Frames
+  (auto-stop), readout, filter (with calibrated focus preset), subarray/ROI.
+* Live view window per camera (opens automatically on Start): wheel zoom,
+  left-drag pan, **SHIFT+drag** = ROI, **right-click** = track a star (FWHM),
+  **CTRL+click** / **ALT+click** = photometry target / comparison. The "Click"
+  combo makes a plain click do any of these. Live FWHM-history and lightcurve
+  plots with CSV export.
+* Windows menu: Camera Settings (all DCAM parameters), Telescope (position,
+  status, offsets/nudges), Focus (manual focus, focus loop with per-filter
+  exposures, results table and focus curve). `F1` lists the shortcuts.
+* Every hardware call runs on a worker thread; the 1 Hz status poll never
+  blocks the UI (long exposures no longer freeze the window).
 
-Edit this README file to reflect your package's functionality.
-
-## Installing Dependencies
-
-To install your package in editable mode for development, use the following command:
+## Tests
 
 ```bash
-pip install -e .
+pytest tests/test_simulation_api.py -v      # API against simulated hardware (~1 min)
+pytest tests/test_gui_qt_sim.py -v          # scripted Qt session, offscreen (~3 min)
+QT_QPA_PLATFORM=offscreen python tests/gui_qt_driver.py /tmp/shots   # same, with screenshots
 ```
 
-This will install the package, allowing you to edit it directly and have changes take effect immediately without reinstalling.
+## Reviews and known issues
 
-To install any optional dependencies, such as development dependencies, use:
-
-```bash
-pip install -e .[dev]
-```
-
-## Building Your Package
-
-To build your package for distribution (e.g., for uploading to PyPI), you can use:
-
-```bash
-python -m build
-```
-
-This will create .tar.gz and .whl files in the dist/ directory.
-
-## Publishing to PyPI
-
-To publish your package to PyPI, you can use the twine tool:
-
-```bash
-pip install twine
-twine upload dist/*
-```
-
-You'll need to have a PyPI account and have your credentials set up for this.
-
----
+* `BUG_REPORT.md` - running list of known bugs (#1-#49 plus the 2026-09-09 review).
+* `CODE_REVIEW_2026_09_09.md` - summary of the September 2026 review: what was
+  fixed, what is still open, and notes for the Qt port.
+* `docs/review_2026_09_09/` - the detailed per-area reports.
+* `NOTES.md` - high frame-rate limitations.

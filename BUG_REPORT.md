@@ -492,3 +492,18 @@ Camera occasionally produces frame intervals much longer than expected (e.g., 2s
 ### When Convenient
 - All LOW severity bugs
 - Remaining MEDIUM bugs
+
+---
+
+## Review 2026-09-09 (H50–H70, A50–A72, G50–G78)
+
+A second full review was done on 2026-09-09 while porting the GUI to PyQt6. The
+findings use three numbering series (H = hardware/acquisition, A = API/config/focus,
+G = Tkinter GUI). Fixed-in-pass and still-open lists are in `CODE_REVIEW_2026_09_09.md`;
+the detailed reports are in `docs/review_2026_09_09/`.
+
+Status changes to the items above as a result of that pass:
+- Fixed: #10 (failed writes counted), #11, #12, #45 (Tk), #1 completed (status socket lock).
+- Verified fixed earlier: #2, #3, #4, #23, #30, #39, #41, #42.
+- N/A: #15 (haletcs raises instead of returning None).
+- Still open: #5, #6, #13, #14, #16, #18, #19, #21, #22 (Tk), #24–#29, #31, #32, #34, #36, #46 (Tk only; the Qt GUI polls on a worker thread), #47–#49 (see H50/H51/H52 for the software side).
