@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -174,7 +175,11 @@ class FocusWindow(QWidget):
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%v / %m exposures")
         layout.addWidget(self.progress_bar)
+        self.eta_label = QLabel("")
+        self.eta_label.setObjectName("hint")
+        layout.addWidget(self.eta_label)
 
         brow = QHBoxLayout()
         self.run_btn = QPushButton("Run Focus Loop")
@@ -329,27 +334,71 @@ class FocusWindow(QWidget):
         self._running = True
         self.run_btn.setEnabled(False)
         self.abort_btn.setEnabled(True)
-        self.progress_bar.setRange(0, cfg.num_positions * max(1, len(filters)))
+        # Progress bookkeeping: the loop reports positions per filter, so the window
+        # converts (filter, position) into an overall exposure count itself
+        self._run_filters = list(filters) if filters else [None]
+        self._n_positions = cfg.num_positions
+        self._run_t0 = time.time()
+        self._exposures_done = 0
+        self.progress_bar.setRange(0, self._n_positions * len(self._run_filters))
         self.progress_bar.setValue(0)
         self.progress_label.setText("Starting focus loop…")
+        self.eta_label.setText("")
         self.results_table.setRowCount(0)
         self.curve.clear()
         logger.info(f"Focus loop: {start}-{end} mm step {step}, base {base}s, filters={filters or 'none'}, out={output_dir}")
 
-        self._completed_before_filter = 0
         run_async(self.api.run_focus_loop, config=cfg, on_progress=self._progress_sig.emit,
                   camera_index=camera_index, on_done=self._on_results,
                   on_error=lambda msg: self.progress_label.setText(f"Error: {msg}"),
                   on_finally=self._loop_finished, name="focus_loop")
 
     def _on_progress(self, progress):
-        filt = f"[{progress.current_filter}] " if progress.current_filter else ""
-        self.progress_label.setText(f"{filt}{progress.message}")
-        if progress.total_positions:
-            self.progress_bar.setValue(min(self.progress_bar.maximum(),
-                                           self._completed_before_filter + progress.completed_positions))
-            if progress.completed_positions + 1 >= progress.total_positions and "Analyzing" in progress.message:
-                self._completed_before_filter += progress.total_positions
+        msg = progress.message
+        filt = progress.current_filter
+        filters = self._run_filters
+        n = max(1, self._n_positions)
+        total = self.progress_bar.maximum()
+        fidx = filters.index(filt) if filt in filters else 0
+        filt_text = f"Filter {filt} ({fidx + 1}/{len(filters)})" if filt else ""
+
+        if msg.startswith("Capturing at focus"):
+            # Reported just before each exposure: completed_positions exposures done in this filter
+            done = fidx * n + progress.completed_positions
+            self._exposures_done = done
+            self.progress_bar.setValue(min(total, done))
+            pos_text = f"position {progress.completed_positions + 1}/{n} at {progress.current_position:.2f} mm"
+            self.progress_label.setText(f"{filt_text + ': ' if filt_text else ''}exposing {pos_text}")
+        elif msg.startswith("Analyzing"):
+            done = (fidx + 1) * n
+            self._exposures_done = done
+            self.progress_bar.setValue(min(total, done))
+            self.progress_label.setText(f"{filt_text + ': ' if filt_text else ''}{msg}")
+        elif msg.startswith("Focus loop complete"):
+            self.progress_bar.setValue(total)
+            self.progress_label.setText(msg)
+        else:
+            self.progress_label.setText(f"{filt_text + ': ' if filt_text else ''}{msg}")
+
+        # Time-remaining estimate from the average time per exposure so far
+        done = self._exposures_done
+        if 0 < done < total:
+            per = (time.time() - self._run_t0) / done
+            remaining = per * (total - done)
+            if done >= 2:
+                self.eta_label.setText(f"{done}/{total} exposures, ~{self._fmt_duration(remaining)} remaining "
+                                       f"({per:.1f} s per exposure)")
+        elif done >= total:
+            self.eta_label.setText(f"All {total} exposures done in {self._fmt_duration(time.time() - self._run_t0)}")
+
+    @staticmethod
+    def _fmt_duration(seconds: float) -> str:
+        seconds = int(round(seconds))
+        if seconds >= 3600:
+            return f"{seconds // 3600}h {(seconds % 3600) // 60:02d}m"
+        if seconds >= 60:
+            return f"{seconds // 60}m {seconds % 60:02d}s"
+        return f"{seconds}s"
 
     def _on_results(self, results: Optional[dict]):
         if not results:
