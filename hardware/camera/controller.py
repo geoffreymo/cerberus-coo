@@ -144,6 +144,7 @@ class CameraController:
 
         # Save queue (set by API when saving is enabled)
         self.save_queue: Optional[queue.Queue] = None
+        self._frames_dropped_queue_full = 0
 
         # Current exposure time (for FITS headers)
         self._current_exposure: Optional[float] = None
@@ -383,11 +384,16 @@ class CameraController:
         self._last_raw_framestamp = framestamp
         corrected_framestamp = framestamp + self._framestamp_offset
 
+        # Snapshot attributes the API may clear from another thread (stop_saving /
+        # disconnect_gps) so a mid-frame change cannot raise and skip _frame_index += 1
+        gps_device = self._gps_device
+        save_queue = self.save_queue
+
         # GPS timestamp — check every frame at low rates, first frame only at high rates
         gps_unix: Optional[float] = None
-        if self._gps_device is not None:
+        if gps_device is not None:
             if self._gps_per_frame or self._gps_start_timestamp is None:
-                gps_ts = self._gps_device.get_timestamp()
+                gps_ts = gps_device.get_timestamp()
                 if gps_ts is not None:
                     gps_unix = gps_ts.unix_seconds
                     if self._gps_start_timestamp is None:
@@ -395,11 +401,13 @@ class CameraController:
                         logger.info(f"GPS start timestamp: {gps_ts.isot}")
 
         # Queue for saving (4-tuple with GPS timestamp)
-        if self.save_queue is not None:
+        if save_queue is not None:
             try:
-                self.save_queue.put_nowait((frame, corrected_timestamp, corrected_framestamp, gps_unix))
+                save_queue.put_nowait((frame, corrected_timestamp, corrected_framestamp, gps_unix))
             except queue.Full:
-                pass
+                self._frames_dropped_queue_full += 1
+                if self._frames_dropped_queue_full in (1, 10, 100, 1000) or self._frames_dropped_queue_full % 10000 == 0:
+                    logger.warning(f"Save queue full: dropped {self._frames_dropped_queue_full} frames so far")
 
         # FPS calculation (time.time is vDSO on Linux, ~50ns — negligible)
         self._frame_count += 1
@@ -588,6 +596,8 @@ class CameraController:
     def _stop_capture_internal(self, force=False) -> bool:
         """Internal capture stop logic."""
         self._capturing = False
+        self._fps = 0.0
+        self._frame_count = 0
 
         if self.dcam is not None and not force:
             try:

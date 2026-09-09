@@ -103,6 +103,8 @@ class TelescopeController:
 
         # Lock for command client (protects against focus thread + guiding conflicts)
         self._cmd_lock = threading.Lock()
+        # Lock for the status client (GUI poll thread + focus loop share it)
+        self._status_lock = threading.Lock()
 
     @property
     def is_connected(self) -> bool:
@@ -260,7 +262,8 @@ class TelescopeController:
             return None
 
         try:
-            status = self._status_client.get_status()
+            with self._status_lock:
+                status = self._status_client.get_status()
             return status.focus_mm
         except Exception as e:
             logger.error(f"Error getting focus: {e}")
@@ -277,7 +280,8 @@ class TelescopeController:
             return None
 
         try:
-            status = self._status_client.get_status()
+            with self._status_lock:
+                status = self._status_client.get_status()
             return FocusStatus(
                 position_mm=status.focus_mm,
                 tube_length_mm=status.tube_length_mm
@@ -355,7 +359,8 @@ class TelescopeController:
             return None
 
         try:
-            return self._status_client.get_position()
+            with self._status_lock:
+                return self._status_client.get_position()
         except Exception as e:
             logger.error(f"Error getting position: {e}")
             return None
@@ -371,7 +376,8 @@ class TelescopeController:
             return None
 
         try:
-            return self._status_client.get_status()
+            with self._status_lock:
+                return self._status_client.get_status()
         except Exception as e:
             logger.error(f"Error getting status: {e}")
             return None

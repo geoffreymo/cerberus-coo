@@ -325,7 +325,8 @@ class CameraControlsPanel(ttk.LabelFrame):
                 if n_images > 0:
                     self._taking_images = True
                     self._target_frames = n_images
-                    self._start_frame_count = cam_state.frames_captured
+                    # start_streaming() resets the counter; cam_state is a stale copy (BUG #45)
+                    self._start_frame_count = 0
                     self.image_progress_var.set(f"Taking: 0 / {n_images}")
 
                 # Auto-start saving if checkbox is checked

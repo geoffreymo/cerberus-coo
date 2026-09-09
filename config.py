@@ -10,7 +10,7 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -204,8 +204,17 @@ def load_config(config_path: str = None) -> CerberusConfig:
 
         logger.info(f"Loading config from: {path}")
 
-        # Build config from JSON
-        telescope = TelescopeConfig(**data.get('telescope', {}))
+        # Build config from JSON (unknown keys are dropped with a warning
+        # instead of discarding the entire configuration)
+        def section(cls, name):
+            raw = data.get(name, {}) or {}
+            known = {f.name for f in fields(cls)}
+            unknown = set(raw) - known
+            if unknown:
+                logger.warning(f"config.json [{name}]: ignoring unknown keys {sorted(unknown)}")
+            return cls(**{k: v for k, v in raw.items() if k in known})
+
+        telescope = section(TelescopeConfig, 'telescope')
 
         camera_data = data.get('camera', {})
         camera = CameraConfig(
@@ -215,13 +224,13 @@ def load_config(config_path: str = None) -> CerberusConfig:
             align_to_second_offset=camera_data.get('align_to_second_offset', 0.10)
         )
 
-        filterwheel = FilterWheelConfig(**data.get('filterwheel', {}))
-        focusloop = FocusLoopConfig(**data.get('focusloop', {}))
-        instrument = InstrumentConfig(**data.get('instrument', {}))
-        acquisition = AcquisitionConfig(**data.get('acquisition', {}))
-        paths = PathsConfig(**data.get('paths', {}))
-        gui = GUIConfig(**data.get('gui', {}))
-        guiding = GuidingConfig(**data.get('guiding', {}))
+        filterwheel = section(FilterWheelConfig, 'filterwheel')
+        focusloop = section(FocusLoopConfig, 'focusloop')
+        instrument = section(InstrumentConfig, 'instrument')
+        acquisition = section(AcquisitionConfig, 'acquisition')
+        paths = section(PathsConfig, 'paths')
+        gui = section(GUIConfig, 'gui')
+        guiding = section(GuidingConfig, 'guiding')
 
         _config = CerberusConfig(
             telescope=telescope,

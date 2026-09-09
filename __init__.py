@@ -35,11 +35,16 @@ __author__ = "Cerberus Team"
 # Core API
 from .api import CerberusAPI, SystemState
 
-# GUI
-from .gui import CerberusGUI
-
 __all__ = [
     'CerberusAPI',
     'SystemState',
     'CerberusGUI',
 ]
+
+
+def __getattr__(name):
+    # Import the Tk GUI lazily so API-only / Qt users don't pay for tkinter
+    if name == 'CerberusGUI':
+        from .gui import CerberusGUI
+        return CerberusGUI
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -79,34 +79,58 @@ class CerberusAPI:
         api.disconnect_telescope()
     """
 
-    def __init__(self, cameras: List[tuple] = None):
+    def __init__(self, cameras: List[tuple] = None, *,
+                 camera_factory: Callable[[], Any] = None,
+                 telescope_factory: Callable[..., Any] = None,
+                 filterwheel_factory: Callable[..., Any] = None,
+                 gps_factory: Callable[[], Any] = None):
         """
         Initialize the Cerberus API.
 
         Args:
             cameras: List of (camera_index, camera_id) tuples. If None, creates
                     a single camera controller for camera 0.
+            camera_factory: Callable returning a camera controller (defaults to
+                    the real DCAM CameraController). Used for simulation/testing.
+            telescope_factory: Callable(host=..., port=...) returning a telescope
+                    controller (defaults to TelescopeController).
+            filterwheel_factory: Callable(library_path=..., filters=...) or
+                    (library_path=..., config_path=...) returning a filter wheel.
+            gps_factory: Callable returning a GPS timing device.
         """
         # Camera configuration
         if cameras is None:
             cameras = [(0, "Camera 0")]
         self._camera_list = cameras
 
+        # Hardware factories (dependency injection; real hardware by default)
+        self._camera_factory = camera_factory or CameraController
+        self._telescope_factory = telescope_factory or TelescopeController
+        self._filterwheel_factory = filterwheel_factory
+        self._gps_factory = gps_factory
+        self.simulated = False
+        # Where _save_config() writes; None = the loaded config.json
+        self.config_save_path: Optional[str] = None
+
         # Per-camera save queues and threads
         self._save_queues: Dict[int, queue.Queue] = {}
         self._save_threads: Dict[int, OptimizedSaveThread] = {}
+        # Legacy single-camera aliases (first camera's save thread/queue)
+        self.save_thread: Optional[OptimizedSaveThread] = None
+        self.save_queue: Optional[queue.Queue] = None
+        self._focus_loop = None
 
         # Hardware controllers - one CameraController per camera
         self.cameras: Dict[int, CameraController] = {}
         for camera_index, camera_id in cameras:
-            self.cameras[camera_index] = CameraController()
+            self.cameras[camera_index] = self._camera_factory()
 
         # Legacy single camera reference (for backward compatibility)
         # Points to first camera
         self.camera = self.cameras[cameras[0][0]] if cameras else None
 
         # Shared hardware
-        self.telescope = TelescopeController()
+        self.telescope = self._telescope_factory()
         self.filterwheel: Optional['FilterWheel'] = None
         self.gps_device: Optional['GPSTimingDevice'] = None
 
@@ -165,12 +189,15 @@ class CerberusAPI:
         logger.info(f"Connecting to camera {camera_index}...")
         controller = self.cameras[camera_index]
         success = controller.connect(camera_index)
+        exposure = controller.get_exposure() if success else None
+        params = controller.get_all_params() if success else {}
 
         with self._state_lock:
             cam_state = self._state.get_camera(camera_index)
             cam_state.connected = success
             if success:
-                cam_state.exposure = controller.get_exposure()
+                cam_state.exposure = exposure
+                cam_state.params = params
 
         self._notify_status_change()
         return success
@@ -273,9 +300,29 @@ class CerberusAPI:
 
         result = self.cameras[camera_index].set_property(name, value)
         if result:
-            # Trigger status update so GUI reflects the change
-            self.update_status()
+            # Refresh this camera's cached params so the GUI reflects the change
+            # (a full update_status() would also poll the telescope - too slow)
+            self._refresh_camera_params(camera_index)
         return result
+
+    def _refresh_camera_params(self, camera_index: int):
+        """Re-read one camera's parameters/exposure into the state and notify."""
+        controller = self.cameras.get(camera_index)
+        if controller is None:
+            return
+        try:
+            params = controller.get_all_params()
+            exposure = controller.get_exposure()
+        except Exception as e:
+            logger.error(f"Error reading camera {camera_index} params: {e}")
+            return
+        with self._state_lock:
+            cam_state = self._state.get_camera(camera_index)
+            if params:
+                cam_state.params = params
+            if exposure is not None:
+                cam_state.exposure = exposure
+        self._notify_status_change()
 
     def get_camera_params(self, camera_index: int = 0) -> Dict[str, Any]:
         """Get all camera parameters."""
@@ -360,7 +407,8 @@ class CerberusAPI:
         object_name: str = "single",
         comment: str = "",
         extra_headers: Optional[Dict[str, Any]] = None,
-        timeout_ms: int = 30000
+        timeout_ms: int = 30000,
+        camera_index: Optional[int] = None
     ) -> Optional[str]:
         """
         Capture a single frame and save to FITS file.
@@ -374,6 +422,7 @@ class CerberusAPI:
             extra_headers: Optional dict of additional header items
                            e.g. {'FOCUS': (35.0, 'Focus position mm')}
             timeout_ms: Capture timeout in milliseconds
+            camera_index: Camera to use (defaults to the first camera)
 
         Returns:
             Filepath if successful, None if failed
@@ -389,17 +438,25 @@ class CerberusAPI:
         warnings.filterwarnings('ignore', category=VerifyWarning, message='.*HIERARCH.*')
         warnings.filterwarnings('ignore', category=VerifyWarning, message='.*Card is too long.*')
 
-        if not self._state.camera_connected:
-            logger.error("Cannot capture: camera not connected")
+        if camera_index is None:
+            camera_index = self._camera_list[0][0]
+        if camera_index not in self.cameras:
+            logger.error(f"Cannot capture: camera {camera_index} not found")
+            return None
+        controller = self.cameras[camera_index]
+
+        cam_state = self._state.get_camera(camera_index)
+        if not cam_state.connected:
+            logger.error(f"Cannot capture: camera {camera_index} not connected")
             return None
 
-        if self._state.camera_streaming:
-            logger.error("Cannot capture single while streaming")
+        if cam_state.streaming:
+            logger.error(f"Cannot capture single on camera {camera_index} while streaming")
             return None
 
         # Capture frame
-        logger.info(f"Capturing single frame to {filepath}")
-        frame = self.camera.capture_single(timeout_ms)
+        logger.info(f"Capturing single frame from camera {camera_index} to {filepath}")
+        frame = controller.capture_single(timeout_ms)
         if frame is None:
             logger.error("Failed to capture frame")
             return None
@@ -433,8 +490,10 @@ class CerberusAPI:
                     pass
 
             # Exposure time
-            if self._state.camera_exposure:
-                primary_hdr['EXPTIME'] = (self._state.camera_exposure, 'Exposure time (s)')
+            exposure = controller.get_exposure() or cam_state.exposure
+            if exposure:
+                primary_hdr['EXPTIME'] = (exposure, 'Exposure time (s)')
+            primary_hdr['CAMERAID'] = (cam_state.camera_id or f"cam{camera_index}", 'Camera identifier')
 
             # Telescope info if connected - query fresh data
             if self._state.telescope_connected and self.telescope:
@@ -479,7 +538,7 @@ class CerberusAPI:
             image_hdu.header['EXTNAME'] = 'DATA'
 
             # Add camera parameters using HIERARCH for long keys
-            camera_params = self.camera.get_all_params()
+            camera_params = controller.get_all_params()
             for key, value in camera_params.items():
                 try:
                     with warnings.catch_warnings():
@@ -544,6 +603,10 @@ class CerberusAPI:
             logger.error(f"Cannot save: camera {camera_index} not streaming")
             return False
 
+        if cam_state.is_saving or camera_index in self._save_threads:
+            logger.warning(f"Camera {camera_index} is already saving; stop it first")
+            return False
+
         # Get camera ID for subdirectory
         camera_id = cam_state.camera_id or f"cam{camera_index}"
         logger.info(f"Starting save on camera {camera_index} ({camera_id}): {object_name} to {output_dir}")
@@ -564,20 +627,20 @@ class CerberusAPI:
 
         # Create date-based subdirectory with camera ID inside
         # Structure: output_dir/captures_YYYY_MM_DD/PHX2/
-        from config import observing_night_str
+        from ..config import observing_night_str
         import os
         date_str = observing_night_str()
         save_folder = os.path.join(output_dir, f"captures_{date_str}", camera_id)
+        try:
+            os.makedirs(save_folder, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Cannot create save folder {save_folder}: {e}")
+            return False
 
         # Create filter callback
         def get_current_filter():
-            """Get current filter name for FITS header"""
-            if self.filterwheel and self._state.filterwheel_connected:
-                try:
-                    return self.filterwheel.filter
-                except:
-                    return None
-            return None
+            """Get current filter name for FITS header (from the wheel if idle, else cached)"""
+            return self._read_filter_name()
 
         # Create telescope callback - reads from cached state (updated by polling)
         def get_telescope_data():
@@ -729,15 +792,22 @@ class CerberusAPI:
         logger.info("Connecting to telescope...")
 
         if host or port:
-            self.telescope = TelescopeController(host=host, port=port)
+            self.telescope = self._telescope_factory(host=host, port=port)
 
         success = self.telescope.connect()
+        focus = None
+        pos = None
+        if success:
+            try:
+                focus = self.telescope.get_focus()
+                pos = self.telescope.get_position()
+            except Exception as e:
+                logger.warning(f"Could not read initial telescope state: {e}")
 
         with self._state_lock:
             self._state.telescope_connected = success
             if success:
-                self._state.telescope_focus = self.telescope.get_focus()
-                pos = self.telescope.get_position()
+                self._state.telescope_focus = focus
                 if pos:
                     self._state.telescope_ra = pos.ra
                     self._state.telescope_dec = pos.dec
@@ -745,6 +815,8 @@ class CerberusAPI:
                     self._state.telescope_lst = pos.lst
                     self._state.telescope_airmass = pos.airmass
                     self._state.telescope_utc = f"{pos.utc_day} {pos.utc_time}"
+                    self._state.telescope_utc_day = pos.utc_day
+                    self._state.telescope_utc_time = pos.utc_time
 
         self._notify_status_change()
         return success
@@ -783,7 +855,8 @@ class CerberusAPI:
                 self._state.telescope_focus = position_mm
             self._notify_status_change()
             # Log focus change for operational record
-            logger.info(f"FOCUS CHANGE: {previous_focus:.2f} -> {position_mm:.2f} mm")
+            prev_str = f"{previous_focus:.2f}" if previous_focus is not None else "None"
+            logger.info(f"FOCUS CHANGE: {prev_str} -> {position_mm:.2f} mm")
         else:
             logger.warning(f"FOCUS CHANGE FAILED: {previous_focus} -> {position_mm:.2f} mm")
         return success
@@ -806,7 +879,9 @@ class CerberusAPI:
                 self._state.telescope_focus = focus
             self._notify_status_change()
             # Log focus change for operational record
-            logger.info(f"FOCUS OFFSET: {previous_focus:.2f} + ({offset_mm:+.2f}) = {focus:.2f} mm")
+            prev_str = f"{previous_focus:.2f}" if previous_focus is not None else "None"
+            new_str = f"{focus:.2f}" if focus is not None else "None"
+            logger.info(f"FOCUS OFFSET: {prev_str} + ({offset_mm:+.2f}) = {new_str} mm")
         else:
             logger.warning(f"FOCUS OFFSET FAILED: {previous_focus} + ({offset_mm:+.2f}) mm")
         return success
@@ -845,9 +920,12 @@ class CerberusAPI:
         Returns:
             True if successful
         """
-        if not FILTERWHEEL_AVAILABLE:
-            logger.error("FilterWheel module not available")
-            return False
+        factory = self._filterwheel_factory
+        if factory is None:
+            if not FILTERWHEEL_AVAILABLE:
+                logger.error("FilterWheel module not available")
+                return False
+            factory = FilterWheel
 
         try:
             logger.info("Connecting to filter wheel...")
@@ -855,13 +933,13 @@ class CerberusAPI:
 
             if config_path:
                 # Legacy: use separate config file
-                self.filterwheel = FilterWheel(
+                self.filterwheel = factory(
                     library_path=config.filterwheel.library_path,
                     config_path=config_path
                 )
             else:
                 # Use main config
-                self.filterwheel = FilterWheel(
+                self.filterwheel = factory(
                     library_path=config.filterwheel.library_path,
                     filters=config.filterwheel.filters
                 )
@@ -908,16 +986,19 @@ class CerberusAPI:
         Returns:
             True if successful
         """
-        if not GPS_AVAILABLE:
-            logger.warning("GPS timing module not available")
-            return False
+        factory = self._gps_factory
+        if factory is None:
+            if not GPS_AVAILABLE:
+                logger.warning("GPS timing module not available")
+                return False
+            factory = GPSTimingDevice
 
         if self.gps_device is not None:
             logger.info("GPS device already connected")
             return True
 
         try:
-            self.gps_device = GPSTimingDevice()
+            self.gps_device = factory()
             if self.gps_device.connect():
                 logger.info("GPS timing device connected")
 
@@ -989,6 +1070,13 @@ class CerberusAPI:
                 # Change filter
                 self.filterwheel.filter = name
                 self.filterwheel.wait_for_move()
+                # Use the wheel's canonical spelling (config keys are case-sensitive)
+                try:
+                    actual = self.filterwheel.filter
+                    if actual and actual != "Moving...":
+                        name = actual
+                except Exception:
+                    pass
 
                 with self._state_lock:
                     self._state.current_filter = name
@@ -1031,7 +1119,27 @@ class CerberusAPI:
         """Get current filter name."""
         if self.filterwheel is None:
             return None
-        return self.filterwheel.filter
+        return self._read_filter_name()
+
+    def _read_filter_name(self) -> Optional[str]:
+        """
+        Read the filter name without contending with a move in progress.
+
+        set_filter() holds _filterwheel_lock for the whole move (+ focus change);
+        readers use a non-blocking acquire and fall back to the cached state so
+        the wheel library is never called from two threads at once.
+        """
+        if self.filterwheel is None or not self._state.filterwheel_connected:
+            return None
+        if not self._filterwheel_lock.acquire(blocking=False):
+            return self._state.current_filter
+        try:
+            return self.filterwheel.filter
+        except Exception as e:
+            logger.debug(f"Filter read failed: {e}")
+            return self._state.current_filter
+        finally:
+            self._filterwheel_lock.release()
 
     def get_available_filters(self) -> List[str]:
         """Get list of available filter names."""
@@ -1112,7 +1220,10 @@ class CerberusAPI:
             logger.info(f"Running focus loop for filter: {filter_name}")
             self.set_filter(filter_name, apply_focus=False)
 
-            result = self.run_focus_loop()
+            results = self.run_focus_loop()
+            result = None
+            if results:
+                result = results.get(filter_name) or results.get(None) or next(iter(results.values()), None)
             if result and result.success:
                 self.set_filter_focus_position(filter_name, result.best_focus, save=False)
                 logger.info(f"  Calibrated {filter_name}: {result.best_focus:.2f} mm")
@@ -1133,79 +1244,23 @@ class CerberusAPI:
         """Save current config to file."""
         try:
             import json
+            from dataclasses import asdict
             from ..config import DEFAULT_CONFIG_PATH
 
             config = get_config()
 
-            # Build config dict
-            config_dict = {
-                "telescope": {
-                    "host": config.telescope.host,
-                    "port": config.telescope.port,
-                    "timeout_seconds": config.telescope.timeout_seconds,
-                    "focus_min_mm": config.telescope.focus_min_mm,
-                    "focus_max_mm": config.telescope.focus_max_mm,
-                    "auto_connect": config.telescope.auto_connect
-                },
-                "camera": {
-                    "buffer_size": config.camera.buffer_size,
-                    "defaults": config.camera.defaults,
-                    "capture_timeout_ms": config.camera.capture_timeout_ms,
-                    "align_to_second_offset": config.camera.align_to_second_offset
-                },
-                "filterwheel": {
-                    "library_path": config.filterwheel.library_path,
-                    "filters": config.filterwheel.filters,
-                    "focus_positions_mm": config.filterwheel.focus_positions_mm
-                },
-                "focusloop": {
-                    "start_position_mm": config.focusloop.start_position_mm,
-                    "end_position_mm": config.focusloop.end_position_mm,
-                    "step_size_mm": config.focusloop.step_size_mm,
-                    "exposure_time_seconds": config.focusloop.exposure_time_seconds,
-                    "settle_time_seconds": config.focusloop.settle_time_seconds,
-                    "max_fwhm_arcsec": config.focusloop.max_fwhm_arcsec,
-                    "auto_apply_best": config.focusloop.auto_apply_best
-                },
-                "instrument": {
-                    "plate_scale_arcsec_per_pixel": config.instrument.plate_scale_arcsec_per_pixel,
-                    "saturation_level_adu": config.instrument.saturation_level_adu,
-                    "min_fwhm_pixels": config.instrument.min_fwhm_pixels,
-                    "fwhm_box_size_pixels": config.instrument.fwhm_box_size_pixels,
-                    "timestamp_rollover_threshold": config.instrument.timestamp_rollover_threshold,
-                    "framestamp_rollover_threshold": config.instrument.framestamp_rollover_threshold
-                },
-                "acquisition": {
-                    "max_queue_size": config.acquisition.max_queue_size,
-                    "max_pending_writes": config.acquisition.max_pending_writes,
-                    "frames_per_cube": config.acquisition.frames_per_cube,
-                    "thread_pool_workers": config.acquisition.thread_pool_workers,
-                    "backpressure_threshold": config.acquisition.backpressure_threshold
-                },
-                "paths": {
-                    "default_output_dir": config.paths.default_output_dir,
-                    "focus_output_dir": config.paths.focus_output_dir
-                },
-                "gui": {
-                    "status_update_interval_ms": config.gui.status_update_interval_ms,
-                    "default_object_name": config.gui.default_object_name,
-                    "default_focus_display_mm": config.gui.default_focus_display_mm
-                },
-                "guiding": {
-                    "averaging_window_seconds": config.guiding.averaging_window_seconds,
-                    "correction_threshold_arcsec": config.guiding.correction_threshold_arcsec,
-                    "max_correction_arcsec": config.guiding.max_correction_arcsec,
-                    "correction_interval_seconds": config.guiding.correction_interval_seconds,
-                    "guide_gain": config.guiding.guide_gain,
-                    "x_to_ra_sign": config.guiding.x_to_ra_sign,
-                    "y_to_dec_sign": config.guiding.y_to_dec_sign
-                }
-            }
+            # Serialize every dataclass field so nothing is lost on round-trip
+            config_dict = asdict(config)
 
-            with open(DEFAULT_CONFIG_PATH, 'w') as f:
+            save_path = self.config_save_path or DEFAULT_CONFIG_PATH
+            import os
+            os.makedirs(os.path.dirname(save_path) or '.', exist_ok=True)
+            with open(save_path, 'w') as f:
                 json.dump(config_dict, f, indent=4)
 
-            logger.info(f"Saved config to: {DEFAULT_CONFIG_PATH}")
+            logger.info(f"Saved config to: {save_path}")
+            return
+
 
         except Exception as e:
             logger.error(f"Failed to save config: {e}")
@@ -1215,7 +1270,8 @@ class CerberusAPI:
     # ==========================================================================
 
     def run_focus_loop(self, config: 'FocusLoopConfig' = None,
-                        on_progress: Callable = None) -> Optional[Dict]:
+                        on_progress: Callable = None,
+                        camera_index: Optional[int] = None) -> Optional[Dict]:
         """
         Run automated focus loop.
 
@@ -1225,6 +1281,7 @@ class CerberusAPI:
         Args:
             config: Focus loop configuration
             on_progress: Optional callback for progress updates
+            camera_index: Camera to use for focus images (defaults to first)
 
         Returns:
             Dict mapping filter_name (or None) -> FocusResult, or None if failed
@@ -1233,19 +1290,30 @@ class CerberusAPI:
             logger.error("FocusLoop module not available")
             return None
 
+        if camera_index is None:
+            camera_index = self._camera_list[0][0]
+        if camera_index not in self.cameras:
+            logger.error(f"Cannot run focus loop: camera {camera_index} not found")
+            return None
+
         if not self._state.telescope_connected:
             logger.error("Cannot run focus loop: telescope not connected")
             return None
 
-        if not self._state.camera_connected:
-            logger.error("Cannot run focus loop: camera not connected")
+        cam_state = self._state.get_camera(camera_index)
+        if not cam_state.connected:
+            logger.error(f"Cannot run focus loop: camera {camera_index} not connected")
             return None
 
-        if self._state.camera_streaming:
-            logger.error("Cannot run focus loop while streaming")
+        if cam_state.streaming:
+            logger.error(f"Cannot run focus loop while camera {camera_index} is streaming")
             return None
 
-        logger.info("Starting focus loop...")
+        if self._state.focus_loop_running:
+            logger.error("Focus loop already running")
+            return None
+
+        logger.info(f"Starting focus loop on camera {camera_index}...")
 
         with self._state_lock:
             self._state.focus_loop_running = True
@@ -1254,9 +1322,20 @@ class CerberusAPI:
         self._notify_status_change()
 
         try:
+            if config is None:
+                fl = get_config().focusloop
+                config = FocusLoopConfig(
+                    start_position=fl.start_position_mm, end_position=fl.end_position_mm,
+                    step_size=fl.step_size_mm, exposure_time=fl.exposure_time_seconds,
+                    settle_time=fl.settle_time_seconds, auto_apply_best=fl.auto_apply_best,
+                    output_dir=get_config().paths.focus_output_dir,
+                )
+            if getattr(config, 'camera_index', None) is None:
+                config.camera_index = camera_index
+
             # Create focus loop with our hardware and API for unified imaging
             focus_loop = FocusLoop(
-                camera=self.camera,
+                camera=self.cameras[camera_index],
                 telescope=self.telescope,
                 filterwheel=self.filterwheel,
                 config=config,
@@ -1479,12 +1558,12 @@ class CerberusAPI:
         # Read shared hardware (no lock held)
         try:
             if telescope_connected:
-                telescope_focus = self.telescope.get_focus()
                 telescope_pos = self.telescope.get_position()
                 telescope_status = self.telescope.get_status()
+                telescope_focus = getattr(telescope_status, 'focus_mm', None) if telescope_status else None
 
             if filterwheel_connected and self.filterwheel:
-                current_filter = self.filterwheel.filter
+                current_filter = self._read_filter_name()
 
         except Exception as e:
             logger.error(f"Error reading shared hardware status: {e}")
@@ -1522,9 +1601,9 @@ class CerberusAPI:
             # Update per-camera state
             for camera_index, data in camera_data.items():
                 cam_state = self._state.get_camera(camera_index)
-                if 'exposure' in data:
+                if data.get('exposure') is not None:
                     cam_state.exposure = data['exposure']
-                if 'temperature' in data and data['temperature']:
+                if data.get('temperature') is not None:
                     cam_state.temperature = data['temperature']
                 if 'fps' in data and data['fps'] is not None:
                     cam_state.frame_rate = data['fps']
@@ -1539,7 +1618,8 @@ class CerberusAPI:
 
             # Update shared telescope state
             if telescope_connected:
-                self._state.telescope_focus = telescope_focus
+                if telescope_focus is not None:
+                    self._state.telescope_focus = telescope_focus
                 if telescope_pos:
                     self._state.telescope_ra = telescope_pos.ra
                     self._state.telescope_dec = telescope_pos.dec
@@ -1558,7 +1638,7 @@ class CerberusAPI:
                     self._state.telescope_cass_ring_angle = telescope_status.cass_ring_angle
                     self._state.telescope_id = telescope_status.telescope_id
 
-            if filterwheel_connected:
+            if filterwheel_connected and current_filter is not None:
                 self._state.current_filter = current_filter
 
         self._notify_status_change()
@@ -1654,24 +1734,27 @@ class CerberusAPI:
         except queue.Full:
             pass
 
-        # Forward to external callbacks
+        # Forward to external callbacks (outside the lock so a callback may
+        # register/unregister callbacks without deadlocking)
         with self._callback_lock:
-            for callback in self._frame_callbacks:
-                try:
-                    callback(frame, timestamp, framestamp)
-                except Exception as e:
-                    logger.error(f"Error in frame callback: {e}")
+            callbacks = list(self._frame_callbacks)
+        for callback in callbacks:
+            try:
+                callback(frame, timestamp, framestamp)
+            except Exception as e:
+                logger.error(f"Error in frame callback: {e}")
 
     def _notify_status_change(self):
-        """Notify status callbacks of state change."""
+        """Notify status callbacks of state change (callbacks run outside the lock)."""
         state_copy = self.state
 
         with self._callback_lock:
-            for callback in self._status_callbacks:
-                try:
-                    callback(state_copy)
-                except Exception as e:
-                    logger.error(f"Error in status callback: {e}")
+            callbacks = list(self._status_callbacks)
+        for callback in callbacks:
+            try:
+                callback(state_copy)
+            except Exception as e:
+                logger.error(f"Error in status callback: {e}")
 
     # ==========================================================================
     # Context Manager
@@ -1685,11 +1768,12 @@ class CerberusAPI:
         """Context manager exit - cleanup all connections."""
         logger.info("Cleaning up Cerberus API...")
 
-        if self._state.is_saving:
-            self.stop_saving()
-
-        if self._state.camera_streaming:
-            self.stop_streaming()
+        for idx in list(self.cameras.keys()):
+            cam = self._state.get_camera(idx)
+            if cam.streaming:
+                self.stop_streaming(idx)      # also stops saving
+            elif cam.is_saving:
+                self.stop_saving(idx)
 
         if self._state.camera_connected:
             self.disconnect_camera()

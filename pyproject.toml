@@ -11,8 +11,12 @@ dependencies = [
     "numpy",
     "astropy",
     "matplotlib",
+    "scipy",
     "haletcs",
 ]
+
+[project.optional-dependencies]
+qt = ["PyQt6>=6.5"]
 
 [tool.setuptools]
 # Tell setuptools to include the package and all subpackages
@@ -28,8 +32,15 @@ packages = [
     "cerberus_coo.hardware.telescope",
     "cerberus_coo.focusloop",
     "cerberus_coo.filterwheel",
+    "cerberus_coo.guiding",
+    "cerberus_coo.gui_qt",
+    "cerberus_coo.gui_qt.panels",
+    "cerberus_coo.gui_qt.widgets",
+    "cerberus_coo.gui_qt.windows",
+    "cerberus_coo.simulation",
 ]
 
 [tool.setuptools.package-dir]
 # Map cerberus_coo to the current directory (cerberus-coo)
 "cerberus_coo" = "."
+

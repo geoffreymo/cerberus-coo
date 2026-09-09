@@ -458,7 +458,7 @@ class FocusWindow(tk.Toplevel):
             camera_id = cam_state.camera_id or "cam0"
 
             # Create date-based directory structure matching regular captures
-            from config import observing_night_str
+            from ..config import observing_night_str
             date_str = observing_night_str()
             output_dir = f"/data/cerberus/captures_{date_str}/{camera_id}/focus"
 
@@ -526,7 +526,7 @@ class FocusWindow(tk.Toplevel):
             from ..focusloop import FocusLoop, FocusLoopConfig
 
             # Create date-based directory structure
-            from config import observing_night_str
+            from ..config import observing_night_str
             date_str = observing_night_str()
             output_dir = f"/tmp/cerberus_focus_sim_{date_str}"
 

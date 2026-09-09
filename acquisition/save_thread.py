@@ -385,6 +385,13 @@ class OptimizedSaveThread(threading.Thread):
         except Exception as e:
             logger.error(f"Write cube error: {e}")
             traceback.print_exc()
+            # Drop this cube rather than wedging the buffer index forever
+            # (a stuck index silently discarded every subsequent frame)
+            self.total_frames_dropped += self.current_frame_idx
+            self.current_frame_idx = 0
+            self.cube_start_time = None
+            if self.gps_buffer is not None:
+                self.gps_buffer.fill(np.nan)
 
     def _check_pending_writes(self):
         """Check status of pending writes (non-blocking)"""
@@ -409,6 +416,7 @@ class OptimizedSaveThread(threading.Thread):
                         else:
                             error_msg = rest[0] if rest else "Unknown error"
                             logger.error(f"Failed to write {fpath}: {error_msg}")
+                            self.total_frames_dropped += nframes
 
                     completed.append(item)
 

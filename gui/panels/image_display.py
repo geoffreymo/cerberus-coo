@@ -659,7 +659,9 @@ class ImageDisplayPanel(ttk.LabelFrame):
                 # Good measurement — update target to track star and feed to guiding
                 cx, cy = self._fwhm_target
                 self._fwhm_target = (cx + int(round(dx)), cy + int(round(dy)))
-                self._guiding_engine.add_measurement(centroid_offset[0], centroid_offset[1])
+                # Feed the ABSOLUTE centroid: the engine compares positions against a
+                # reference, so box-relative offsets made guiding inert (review G51)
+                self._guiding_engine.add_measurement(cx + dx, cy + dy)
             else:
                 # Centroid near box edge — star may be leaving, don't guide on this
                 logger.debug(f"Skipping guiding measurement: centroid offset ({dx:.1f}, {dy:.1f}) near box edge")

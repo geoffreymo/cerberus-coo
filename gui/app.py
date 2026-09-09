@@ -488,10 +488,10 @@ class CerberusGUI:
 
     def _on_close(self):
         """Handle window close."""
-        # Set closing flag to stop updates
-        self._closing = True
-
         if messagebox.askokcancel("Quit", "Are you sure you want to quit?"):
+            # Set closing flag only once confirmed: setting it before the dialog
+            # let the 1 Hz status timer exit and never reschedule (review G52)
+            self._closing = True
             logger.info("Closing Cerberus GUI...")
 
             # Cleanup all camera tabs

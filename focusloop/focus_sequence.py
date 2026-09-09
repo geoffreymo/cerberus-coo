@@ -43,6 +43,7 @@ class FocusLoopConfig:
     output_dir: str = "/tmp/cerberus_focus"
     object_name: str = "focus"
     camera_id: str = ""  # Camera identifier for filenames (e.g., "PHX2")
+    camera_index: Optional[int] = None  # Camera index for API captures (None = first)
 
     # Behavior
     settle_time: float = 2.0  # seconds after focus move
@@ -241,10 +242,10 @@ class FocusLoop:
         # Use API's capture_single_to_fits if available (same controller as regular imaging)
         # TELFOCUS header is automatically added by the API from telescope state
         if hasattr(self, 'api') and self.api is not None:
-            result = self.api.capture_single_to_fits(
-                filepath=filepath,
-                object_name=self.config.object_name
-            )
+            capture_kwargs = dict(filepath=filepath, object_name=self.config.object_name)
+            if self.config.camera_index is not None:
+                capture_kwargs['camera_index'] = self.config.camera_index
+            result = self.api.capture_single_to_fits(**capture_kwargs)
             if result is None:
                 raise RuntimeError("Failed to capture focus image via API")
             else:

@@ -71,6 +71,24 @@ class FocusAnalyzer:
 
         self._validate_config()
 
+    @staticmethod
+    def _sextractor_binary() -> str:
+        """Locate the SExtractor executable ('sex' or 'source-extractor')."""
+        import shutil
+        import sys
+        candidates = ["sex", "source-extractor", "sextractor"]
+        for name in candidates:
+            found = shutil.which(name)
+            if found:
+                return found
+        # Fall back to the running interpreter's environment (conda env bin)
+        env_bin = Path(sys.executable).parent
+        for name in candidates:
+            if (env_bin / name).exists():
+                return str(env_bin / name)
+        raise FileNotFoundError("SExtractor not found (tried: sex, source-extractor). "
+                                "Install with: conda install -c conda-forge astromatic-source-extractor")
+
     def _validate_config(self):
         """Verify SExtractor config files exist."""
         required = ['focus.sex', 'focus.param', 'default.conv']
@@ -95,7 +113,7 @@ class FocusAnalyzer:
             catalog_path = image_path.with_suffix('.cat')
 
         cmd = [
-            "sex",
+            self._sextractor_binary(),
             "-c", str(self.config_dir / "focus.sex"),
             str(image_path),
             "-CATALOG_NAME", str(catalog_path),
@@ -365,9 +383,11 @@ class FocusAnalyzer:
         Returns:
             Path to saved plot, or None if not saved
         """
-        import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend for saving plots
-        import matplotlib.pyplot as plt
+        # Build the figure with an explicit Agg canvas instead of pyplot + matplotlib.use():
+        # switching the global backend at runtime from the focus thread closed every
+        # interactive figure the GUI had open (review finding G56).
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
 
         if not result.measurements:
             self.logger.warning("No measurements to plot")
@@ -376,32 +396,29 @@ class FocusAnalyzer:
         x = np.array(list(result.measurements.keys()))
         y = np.array(list(result.measurements.values()))
 
-        plt.figure(figsize=(8, 6))
-        plt.scatter(x, y, color='red', s=60, zorder=5, label='Measured FWHM')
+        fig = Figure(figsize=(8, 6))
+        FigureCanvasAgg(fig)
+        ax = fig.add_subplot(111)
+        ax.scatter(x, y, color='red', s=60, zorder=5, label='Measured FWHM')
 
         if result.success:
-            # Plot fit curve
             xx = np.linspace(x.min(), x.max(), 400)
             yy = np.polyval(result.fit_coefficients, xx)
-            plt.plot(xx, yy, 'b-', linewidth=2, label='Parabolic Fit')
-
-            # Mark best focus
-            plt.axvline(result.best_focus, color='green', linestyle='--',
+            ax.plot(xx, yy, 'b-', linewidth=2, label='Parabolic Fit')
+            ax.axvline(result.best_focus, color='green', linestyle='--',
                        label=f'Best Focus = {result.best_focus:.2f} mm, FWHM = {result.best_fwhm_arcsec:.3f}"')
-            plt.scatter([result.best_focus], [result.best_fwhm_arcsec],
+            ax.scatter([result.best_focus], [result.best_fwhm_arcsec],
                        color='green', s=100, zorder=6, marker='*')
 
-        plt.xlabel("Focus Position (mm)", fontsize=12)
-        plt.ylabel("FWHM (arcsec)", fontsize=12)
-        plt.title("FWHM vs Focus Position", fontsize=14)
-        plt.legend(loc='best')
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
+        ax.set_xlabel("Focus Position (mm)", fontsize=12)
+        ax.set_ylabel("FWHM (arcsec)", fontsize=12)
+        ax.set_title("FWHM vs Focus Position", fontsize=14)
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
 
         if output_path:
-            plt.savefig(output_path, dpi=150)
+            fig.savefig(output_path, dpi=150)
             self.logger.info(f"Saved plot to {output_path}")
-
-        plt.close()
 
         return output_path
