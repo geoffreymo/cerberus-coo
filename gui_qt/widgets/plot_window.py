@@ -7,7 +7,7 @@ from typing import Callable, List, Optional
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+from PyQt6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout,
                              QWidget, QCheckBox, QSpinBox)
 
 import matplotlib
@@ -200,65 +200,77 @@ class LightcurvePlotWindow(_PlotWindowBase):
 
 
 class FocusCurveWidget(QWidget):
-    """Embedded focus-curve plot (measurements + fitted parabola)."""
+    """
+    Embedded focus-curve plot (measurements + fitted parabola, one colour per filter).
+
+    Uses fixed subplot margins rather than tight_layout: with a legend taller than
+    the axes, tight_layout collapses the axes to a few pixels after a resize.
+    """
+
+    COLORS = ["#64b5f6", "#4caf50", "#ff9800", "#e91e63", "#9c27b0", "#00bcd4", "#cddc39", "#ff5722"]
 
     def __init__(self, parent=None, dark: bool = True):
         super().__init__(parent)
-        self.fig = Figure(figsize=(5, 3), tight_layout=True)
+        self._dark = dark
+        self.fig = Figure(figsize=(6, 3.2))
         self.canvas = FigureCanvasQTAgg(self.fig)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.canvas.setMinimumHeight(220)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.canvas)
         self.ax = self.fig.add_subplot(111)
-        _style_axes(self.ax, dark)
-        self.ax.set_xlabel("Focus (mm)")
-        self.ax.set_ylabel("FWHM (arcsec)")
-        self._dark = dark
         self.clear()
 
-    def clear(self):
+    def _setup_axes(self, title: str, with_legend: bool):
         self.ax.cla()
         _style_axes(self.ax, self._dark)
         self.ax.set_xlabel("Focus (mm)")
         self.ax.set_ylabel("FWHM (arcsec)")
-        self.ax.set_title("Focus curve")
+        self.ax.set_title(title, fontsize=10)
+        # Reserve room on the right for the legend (outside the axes) when needed
+        self.fig.subplots_adjust(left=0.11, right=0.78 if with_legend else 0.97, bottom=0.17, top=0.9)
+
+    def _legend(self):
+        leg = self.ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=8,
+                             frameon=False, borderaxespad=0.0, handlelength=1.6)
+        fg = "#dddddd" if self._dark else "#222222"
+        for text in leg.get_texts():
+            text.set_color(fg)
+
+    def clear(self):
+        self._setup_axes("Focus curve", with_legend=False)
         self.canvas.draw_idle()
 
     def plot_results(self, results: dict):
         """results: {filter_name_or_None: FocusResult}"""
-        self.ax.cla()
-        _style_axes(self.ax, self._dark)
-        colors = ["#64b5f6", "#4caf50", "#ff9800", "#e91e63", "#9c27b0", "#00bcd4", "#cddc39", "#ff5722"]
-        for i, (name, res) in enumerate(results.items()):
-            if not res or not res.measurements:
-                continue
-            color = colors[i % len(colors)]
+        items = [(name, res) for name, res in results.items() if res and res.measurements]
+        self._setup_axes("Focus curve", with_legend=bool(items))
+        for i, (name, res) in enumerate(items):
+            color = self.COLORS[i % len(self.COLORS)]
             xs = np.array(sorted(res.measurements))
             ys = np.array([res.measurements[x] for x in xs])
             label = name or "all"
-            self.ax.plot(xs, ys, 'o', color=color, label=f"{label} data")
             if res.success and res.fit_coefficients and any(res.fit_coefficients):
                 a, b, c = res.fit_coefficients
                 xf = np.linspace(xs.min(), xs.max(), 200)
-                self.ax.plot(xf, a * xf ** 2 + b * xf + c, '-', color=color, alpha=0.8,
-                             label=f"{label} fit: {res.best_focus:.2f} mm, {res.best_fwhm_arcsec:.2f}\"")
-                self.ax.axvline(res.best_focus, color=color, linestyle='--', alpha=0.5)
-        self.ax.set_xlabel("Focus (mm)")
-        self.ax.set_ylabel("FWHM (arcsec)")
-        self.ax.set_title("Focus curve")
-        self.ax.legend(fontsize=8)
+                # One legend entry per filter: the fit line carries the label
+                self.ax.plot(xs, ys, 'o', color=color, markersize=4, label='_nolegend_')
+                self.ax.plot(xf, a * xf ** 2 + b * xf + c, '-', color=color, alpha=0.9,
+                             label=f'{label}  {res.best_focus:.2f} mm')
+                self.ax.axvline(res.best_focus, color=color, linestyle='--', alpha=0.4, linewidth=1)
+            else:
+                self.ax.plot(xs, ys, 'o-', color=color, markersize=4, label=f"{label}: no fit")
+        if items:
+            self._legend()
         self.canvas.draw_idle()
 
     def plot_partial(self, measurements: dict, label: str = ""):
         """Live update while a run is in progress."""
-        self.ax.cla()
-        _style_axes(self.ax, self._dark)
+        self._setup_axes("Focus curve (running)", with_legend=bool(measurements))
         if measurements:
             xs = np.array(sorted(measurements))
             ys = np.array([measurements[x] for x in xs])
-            self.ax.plot(xs, ys, 'o-', color="#64b5f6", label=label or "in progress")
-            self.ax.legend(fontsize=8)
-        self.ax.set_xlabel("Focus (mm)")
-        self.ax.set_ylabel("FWHM (arcsec)")
-        self.ax.set_title("Focus curve (running)")
+            self.ax.plot(xs, ys, 'o-', color=self.COLORS[0], markersize=4, label=label or "in progress")
+            self._legend()
         self.canvas.draw_idle()
