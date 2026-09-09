@@ -7,6 +7,11 @@ Run with:
 """
 
 from .app import CerberusQtGUI
-from .__main__ import main
 
 __all__ = ['CerberusQtGUI', 'main']
+
+
+def main(argv=None) -> int:
+    """Entry point (imported lazily so `python -m cerberus_coo.gui_qt` doesn't double-import __main__)."""
+    from .__main__ import main as _main
+    return _main(argv)

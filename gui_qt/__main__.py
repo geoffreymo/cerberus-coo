@@ -20,7 +20,8 @@ def _parse_size(text: str):
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Cerberus High-Speed Imager - PyQt6 GUI")
+    parser = argparse.ArgumentParser(prog="python -m cerberus_coo.gui_qt",
+                                     description="Cerberus High-Speed Imager - PyQt6 GUI")
     parser.add_argument('--sim', '--simulate', action='store_true',
                         help='Run with simulated hardware (no DCAM/TCS/filter wheel needed)')
     parser.add_argument('--sim-cameras', type=int, default=2, help='Number of simulated cameras (default 2)')
